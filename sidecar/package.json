@@ -1,0 +1,16 @@
+{
+  "name": "claude-code-nvim-sidecar",
+  "private": true,
+  "type": "module",
+  "description": "Bridges claude-code.nvim to the Claude Agent SDK over newline-delimited JSON on stdio.",
+  "scripts": {
+    "build": "esbuild src/index.ts --bundle --platform=node --format=esm --target=node18 --outfile=../dist/sidecar.mjs --banner:js=\"import { createRequire } from 'node:module'; const require = createRequire(import.meta.url);\"",
+    "typecheck": "tsc --noEmit"
+  },
+  "devDependencies": {
+    "@anthropic-ai/claude-agent-sdk": "^0.3.280",
+    "@types/node": "^22.0.0",
+    "esbuild": "^0.25.0",
+    "typescript": "^5.6.0"
+  }
+}
