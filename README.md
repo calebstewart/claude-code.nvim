@@ -41,6 +41,41 @@ until the first press:
 }
 ```
 
+### Nix
+
+The repository is a flake. Its package is the plugin with Node.js from Nix baked in as the default `node`, so
+nothing needs to be on `$PATH` except `claude`.
+
+```nix
+{
+  inputs.claude-code-nvim = {
+    url = "github:calebstewart/claude-code.nvim";
+    inputs.nixpkgs.follows = "nixpkgs";
+  };
+}
+```
+
+Outputs: `packages.<system>.default`, `overlays.default` (adds `pkgs.vimPlugins.claude-code-nvim`), and a
+`devShells.<system>.default` for working on the plugin.
+
+With Home Manager's Neovim module:
+
+```nix
+programs.neovim.plugins = [ inputs.claude-code-nvim.packages.${pkgs.system}.default ];
+```
+
+With lazy.nvim, point `dir` at the package's store path (for example by writing it into a Lua file your config
+reads):
+
+```lua
+{
+  dir = "/nix/store/…-vimplugin-claude-code.nvim-…", -- "${inputs.claude-code-nvim.packages.${pkgs.system}.default}"
+  name = "claude-code.nvim",
+  cmd = "Claude",
+  opts = {},
+}
+```
+
 ## Configuration
 
 Defaults:
@@ -189,6 +224,8 @@ Shared state follows the CLI's conventions: prompt history is appended under the
 `~/.claude/sessions/` (best effort).
 
 ## Development
+
+`nix develop` gives you Node, Neovim and stylua.
 
 ```sh
 cd sidecar

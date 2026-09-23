@@ -1,2 +1,4 @@
 sidecar/node_modules/
 .dev/
+result
+result-*
