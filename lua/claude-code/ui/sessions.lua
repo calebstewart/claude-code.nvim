@@ -306,11 +306,18 @@ function Picker:filter()
   if query == "" then
     self.shown = self.entries
   else
-    self.shown = vim.fn.matchfuzzy(self.entries, query, {
-      text_cb = function(entry)
-        return entry.title .. " " .. (entry.first_prompt or "") .. " " .. (entry.branch or "")
-      end,
-    })
+    -- matchfuzzy converts its list to Vimscript values, and entries for open sessions
+    -- hold the live Session (functions, process handles), so match plain records.
+    local records = {}
+    for i, entry in ipairs(self.entries) do
+      records[i] = {
+        text = entry.title .. " " .. (entry.first_prompt or "") .. " " .. (entry.branch or ""),
+        index = i,
+      }
+    end
+    self.shown = vim.tbl_map(function(record)
+      return self.entries[record.index]
+    end, vim.fn.matchfuzzy(records, query, { key = "text" }))
   end
   -- Keep the selection on the same session when the list changes.
   if self.state.selected_id then
