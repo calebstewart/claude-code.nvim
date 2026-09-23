@@ -147,6 +147,17 @@ function Chat.new(opts)
       end
     end,
   })
+  -- Some focus changes skip WinEnter (e.g. Neovim leaving a float at the end of
+  -- startup); starting to type in the dock is the other giveaway.
+  api.nvim_create_autocmd("InsertEnter", {
+    group = group,
+    buffer = self.dock,
+    callback = function()
+      vim.schedule(function()
+        self:focus_prompt(true)
+      end)
+    end,
+  })
   return self
 end
 
@@ -281,6 +292,20 @@ function Chat:show(show_opts)
   self:layout()
   self:render_welcome()
   self:focus_prompt(true)
+  if vim.v.vim_did_enter == 0 then
+    -- Opened during startup (`nvim +"Claude here"`): Neovim moves focus out of the
+    -- floating prompt as startup finishes, so come back once it has.
+    api.nvim_create_autocmd("VimEnter", {
+      once = true,
+      callback = function()
+        vim.schedule(function()
+          if self:visible() then
+            self:focus_prompt(true)
+          end
+        end)
+      end,
+    })
+  end
   if self.opts.on_show then
     self.opts.on_show()
   end
