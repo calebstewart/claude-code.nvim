@@ -66,16 +66,32 @@ end
 
 --- Show `session` in the sidebar, in place of whichever session is there.
 ---@param session claude_code.Session
-function M.show(session)
-  local size
+---@param opts? { here?: boolean } `here`: take over the current window instead of a sidebar.
+function M.show(session, opts)
+  local show_opts = {}
   if current and current ~= session and current.chat:visible() then
-    size = current.chat:size()
-    current.chat:hide()
+    if current.chat:is_in_place() then
+      show_opts = current.chat:detach() -- the next session takes over the same window
+    else
+      show_opts.size = current.chat:size()
+      current.chat:hide()
+    end
+  elseif opts and opts.here and not session.chat:visible() then
+    local win = vim.api.nvim_get_current_win()
+    if vim.api.nvim_win_get_config(win).relative == "" then
+      show_opts = { win = win, restore = vim.api.nvim_win_get_buf(win) }
+    end
   end
   current = session
   session.last_active = os.time()
   session:ensure_running()
-  session.chat:show(size)
+  session.chat:show(show_opts)
+end
+
+--- Track a session created elsewhere (e.g. `:Claude here`), without showing it.
+---@param session claude_code.Session
+function M.adopt(session)
+  add(session)
 end
 
 --- Start a new session and show it.
@@ -161,6 +177,52 @@ function M.close(session)
   end
   if current == session then
     current = nil
+  end
+end
+
+--- Nothing but empty scratch space is open: one tab, and only unnamed, unmodified,
+--- empty buffers (the chat's own buffers are unlisted, so they don't count).
+local function nothing_else_open()
+  if #vim.api.nvim_list_tabpages() > 1 then
+    return false
+  end
+  for _, info in ipairs(vim.fn.getbufinfo({ buflisted = 1 })) do
+    if info.name ~= "" or info.changed == 1 or info.linecount > 1 then
+      return false
+    end
+    if (vim.api.nvim_buf_get_lines(info.bufnr, 0, 1, false)[1] or "") ~= "" then
+      return false
+    end
+  end
+  -- Unlisted buffers still on screen (help, terminals, other plugins' windows) count too.
+  for _, win in ipairs(vim.api.nvim_list_wins()) do
+    local buf = vim.api.nvim_win_get_buf(win)
+    if vim.api.nvim_win_get_config(win).relative == "" and not vim.bo[buf].buflisted then
+      return false
+    end
+  end
+  return true
+end
+
+--- `/exit`: end `session`, as exiting the CLI would. When Neovim was only being
+--- used for Claude, move on to another open session, or quit if there's none.
+---@param session claude_code.Session
+function M.exit(session)
+  local in_place = session.chat:is_in_place()
+  M.close(session)
+  if not nothing_else_open() then
+    return
+  end
+  local next_session
+  for _, s in ipairs(live) do
+    if not next_session or s.last_active > next_session.last_active then
+      next_session = s
+    end
+  end
+  if next_session then
+    M.show(next_session, { here = in_place })
+  else
+    pcall(vim.cmd, "qall")
   end
 end
 

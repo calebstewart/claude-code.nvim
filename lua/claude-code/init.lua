@@ -18,6 +18,24 @@ function M.open()
   end
 end
 
+--- Open the chat in the current window instead of a sidebar, e.g.
+--- `nvim +"Claude here"` for a Neovim that's just the chat.
+function M.here()
+  local s = sessions.current()
+  if s and s.chat:visible() then
+    sessions.show(s)
+    return
+  end
+  if not s then
+    s = require("claude-code.session").new()
+    if not s then
+      return
+    end
+    sessions.adopt(s)
+  end
+  sessions.show(s, { here = true })
+end
+
 --- Show or hide the chat.
 function M.toggle()
   local s = sessions.current()

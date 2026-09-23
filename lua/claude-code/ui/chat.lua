@@ -81,6 +81,7 @@ end
 ---@field private title? string
 ---@field private augroup integer
 ---@field private slash claude_code.SlashMenu
+---@field private in_place? { restore?: integer } Shown in a window it took over (`:Claude here`); what to give it back.
 local Chat = {}
 Chat.__index = Chat
 
@@ -121,7 +122,7 @@ function Chat.new(opts)
       local wins = self:windows()
       if closed and (closed == wins.transcript or closed == wins.dock or closed == wins.prompt) then
         vim.schedule(function()
-          self:hide()
+          self:hide({ closing = true })
         end)
       end
     end,
@@ -169,7 +170,9 @@ end
 
 ---@param win integer
 local function plain_window(win)
-  local wo = vim.wo[win]
+  -- Local to the chat's buffer in this window, so a window handed back after
+  -- `:Claude here` gets its own options back.
+  local wo = vim.wo[win][0]
   wo.number, wo.relativenumber, wo.cursorline = false, false, false
   wo.signcolumn, wo.foldcolumn, wo.spell = "no", "0", false
   wo.wrap, wo.linebreak = true, true
@@ -199,7 +202,7 @@ function Chat:set_title(title)
   self.title = title
   local win = self:windows().transcript
   if win then
-    vim.wo[win].winbar = self:winbar()
+    vim.wo[win][0].winbar = self:winbar()
   end
 end
 
@@ -215,27 +218,39 @@ function Chat:winbar()
   )
 end
 
+---@class claude_code.ChatShowOpts
+---@field size? integer Pane size to use instead of the configured one.
+---@field win? integer Take over this window instead of opening a split (`:Claude here`).
+---@field restore? integer Buffer to give `win` back when the chat is hidden.
+
 --- Open the sidebar (or focus it) with the cursor in the prompt.
----@param size? integer Pane size to use instead of the configured one.
-function Chat:show(size)
+---@param show_opts? claude_code.ChatShowOpts
+function Chat:show(show_opts)
+  show_opts = show_opts or {}
   local wins = self:windows()
   local opts = config.options.window
   if not wins.transcript then
     local vertical = opts.position == "left" or opts.position == "right"
-    size = size or opts.size
-    if size < 1 then
-      size = math.floor((vertical and vim.o.columns or vim.o.lines) * size)
+    if show_opts.win then
+      wins.transcript = show_opts.win
+      api.nvim_win_set_buf(wins.transcript, self.transcript.buf)
+      self.in_place = { restore = show_opts.restore }
+    else
+      local size = show_opts.size or opts.size
+      if size < 1 then
+        size = math.floor((vertical and vim.o.columns or vim.o.lines) * size)
+      end
+      wins.transcript = api.nvim_open_win(self.transcript.buf, false, {
+        split = opts.position,
+        win = -1,
+        width = vertical and size or nil,
+        height = not vertical and size or nil,
+      })
+      vim.wo[wins.transcript][0].winfixwidth = vertical
     end
-    wins.transcript = api.nvim_open_win(self.transcript.buf, false, {
-      split = opts.position,
-      win = -1,
-      width = vertical and size or nil,
-      height = not vertical and size or nil,
-    })
     plain_window(wins.transcript)
-    local wo = vim.wo[wins.transcript]
+    local wo = vim.wo[wins.transcript][0]
     wo.conceallevel, wo.concealcursor = 2, "nc"
-    wo.winfixwidth = vertical
     wo.winbar = self:winbar()
   end
   if not wins.dock then
@@ -303,12 +318,39 @@ function Chat:focus_prompt(insert)
   if insert then
     vim.cmd("normal! G$")
     vim.cmd("startinsert!")
+    -- If this runs inside a mapping that also left insert mode (e.g. switching
+    -- sessions closes one chat, then opens another), the stopinsert lands after
+    -- our startinsert; re-enter once the mapping is done.
+    vim.schedule(function()
+      if api.nvim_get_current_win() == win and api.nvim_get_mode().mode ~= "i" then
+        vim.cmd("startinsert!")
+      end
+    end)
   else
     vim.cmd("stopinsert")
   end
 end
 
-function Chat:hide()
+--- Close the prompt and the space under it, keeping the transcript's window
+--- for the next session to take over (switching sessions in place).
+---@return claude_code.ChatShowOpts
+function Chat:detach()
+  self.slash:close()
+  local wins = self:windows()
+  local handoff = { win = wins.transcript, restore = self.in_place and self.in_place.restore }
+  self.in_place = nil
+  for _, key in ipairs({ "prompt", "dock" }) do
+    if wins[key] then
+      pcall(api.nvim_win_close, wins[key], false)
+    end
+  end
+  self.float = nil
+  return handoff
+end
+
+---@param opts? { closing?: boolean } `closing`: one of the chat's windows was closed (e.g. `:q`).
+function Chat:hide(opts)
+  opts = opts or {}
   self.slash:close()
   local wins = self:windows()
   -- Closing the window you're typing in shouldn't leave you in insert mode elsewhere.
@@ -316,14 +358,41 @@ function Chat:hide()
   if cur == wins.prompt or cur == wins.transcript or cur == wins.dock then
     vim.cmd("stopinsert")
   end
+  if self.in_place and not opts.closing and wins.transcript then
+    -- Give the window we took over back, rather than closing it.
+    local restore = self.in_place.restore
+    local handoff = self:detach()
+    api.nvim_win_call(handoff.win, function()
+      if restore and api.nvim_buf_is_valid(restore) then
+        api.nvim_win_set_buf(0, restore)
+      else
+        vim.cmd("enew")
+      end
+    end)
+    return
+  end
+  self.in_place = nil
   -- Any of these may already be gone, so no ipairs (it stops at the first nil).
   for _, key in ipairs({ "prompt", "dock", "transcript" }) do
-    if wins[key] then
-      -- Fails when it is the last window; leave it open then.
-      pcall(api.nvim_win_close, wins[key], false)
+    local win = wins[key]
+    if win and api.nvim_win_is_valid(win) and not pcall(api.nvim_win_close, win, false) then
+      -- It's the last window. After `:q` that means quit (e.g. a Neovim that was
+      -- only running the chat); otherwise leave an empty window.
+      api.nvim_win_call(win, function()
+        if opts.closing then
+          pcall(vim.cmd, "quit")
+        else
+          vim.cmd("enew")
+        end
+      end)
     end
   end
   self.float = nil
+end
+
+--- Showing in a window it took over (`:Claude here`)?
+function Chat:is_in_place()
+  return self.in_place ~= nil
 end
 
 function Chat:toggle()

@@ -10,6 +10,9 @@ local subcommands = {
   toggle = function()
     require("claude-code").toggle()
   end,
+  here = function()
+    require("claude-code").here()
+  end,
   send = function(args)
     require("claude-code").send(args)
   end,

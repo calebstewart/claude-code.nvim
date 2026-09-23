@@ -312,8 +312,8 @@ function Session:send(text, attachments)
     return self:run_shell(command)
   end
   if EXIT_COMMANDS[vim.trim(text)] then
-    require("claude-code.sessions").close(self)
     vim.notify(("claude-code: ended “%s”; resume it from :Claude sessions"):format(self.title or "New session"))
+    require("claude-code.sessions").exit(self)
     -- Not "sent": the chat's buffers are gone, so there's no prompt to clear.
     return false
   end

@@ -127,6 +127,9 @@ doing, the model and the session cost.
 - In the transcript, `i`/`a`/`o` jump to the prompt, `<Tab>`/`<CR>` on a tool call expand its output (or an
   edit's diff), and `q` hides the chat.
 - `:q` in any of the chat's windows closes the whole sidebar; the session keeps running.
+- `:Claude here` opens the chat in the current window instead of a sidebar, so `nvim +"Claude here"` gives
+  you a Neovim that's just Claude (`:q` in the chat then quits). Switching sessions stays in that window, and
+  hiding the chat gives the window back.
 - Typing `/` at the start of the prompt opens a menu of slash commands, skills and plugin commands (Claude
   Code's list for the session, minus ones tied to its terminal UI), filtered fuzzily as you type. `<Tab>`
   completes, `<Up>`/`<Down>` move. Output of built-in commands like `/context` appears in the transcript.
@@ -141,7 +144,9 @@ doing, the model and the session cost.
   output), and the command and output are added to the conversation. When it exits Claude responds; stop it
   with `<C-c>` and it's only kept as context. Running one while Claude is working adds it as context for
   Claude's next step.
-- Sending `/exit`, `/quit` or `exit` ends the session, as in the CLI (same as `:Claude stop`).
+- Sending `/exit`, `/quit` or `exit` ends the session, as in the CLI. If Neovim has nothing else open (only
+  empty buffers), it then moves on to your other open session, or quits Neovim when there isn't one, so a
+  `nvim +"Claude here"` exits like the CLI. With files open, it just closes the chat.
 
 ### Permission modes
 
@@ -201,6 +206,7 @@ and vice versa, names included.
 |---|---|
 | `:Claude` / `:Claude open` | Open the chat and focus the prompt, starting a session if needed |
 | `:Claude toggle` | Show or hide the chat |
+| `:Claude here` | Open the chat in the current window (e.g. `nvim +"Claude here"`) |
 | `:Claude send [text]` | Send `text` (or just focus the prompt) |
 | `:Claude interrupt` | Stop the turn in progress |
 | `:Claude sessions` | Pick a session to switch to or resume |
