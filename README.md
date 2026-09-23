@@ -98,6 +98,7 @@ Defaults:
     close = "q",             -- normal mode, transcript
     toggle_tool = { "<Tab>", "<CR>" }, -- normal mode, transcript: expand/collapse tool output
     cycle_mode = "<S-Tab>",  -- prompt and transcript: cycle default → accept edits → plan → auto
+    paste_image = "<C-v>",   -- prompt, insert mode: paste an image from the clipboard
   },
   icons = "nerd",            -- "nerd" (needs a Nerd Font) | "unicode"
   markdown = { enabled = true }, -- shaded code blocks, bullets, rules, quote bars; disable if you use render-markdown.nvim
@@ -130,6 +131,11 @@ doing, the model and the session cost.
   Code's list for the session, minus ones tied to its terminal UI), filtered fuzzily as you type. `<Tab>`
   completes, `<Up>`/`<Down>` move. Output of built-in commands like `/context` appears in the transcript.
   nvim-cmp and blink.cmp are paused in the prompt while you type a command, so only one menu shows.
+- **Images:** `<C-v>` in the prompt pastes an image from the clipboard (a terminal can only paste text, so, like
+  the CLI, the plugin asks the OS for it: `osascript` on macOS, `wl-paste` or `xclip` on Linux). Pasting or
+  dragging in a path to a PNG, JPEG, GIF or WebP file attaches it too, as does `:Claude image <path>`. Each
+  shows as an `[Image #N]` placeholder; delete it to drop the image. Images larger than the API accepts are
+  shrunk first (with `sips` on macOS, or ImageMagick).
 - `!command` runs a shell command yourself, as in the CLI's bash mode: in the session's directory, without
   going through Claude or a permission prompt. It shows in the transcript like a tool call (`<Tab>` expands the
   output), and the command and output are added to the conversation. When it exits Claude responds; stop it
@@ -202,6 +208,7 @@ and vice versa, names included.
 | `:Claude rename [name]` | Rename the current session (asks if no name is given) |
 | `:Claude next` / `:Claude prev` | Cycle through the sessions open in this Neovim |
 | `:Claude mode [mode]` | Set the current session's permission mode (pick from a list if none is given) |
+| `:Claude image <path>` | Attach an image file to the prompt |
 | `:Claude stop` | End the current session and close it (resume it later from the picker) |
 
 The same actions are available from Lua: `require("claude-code").sessions()`, `.new(name)`, `.rename(name)`,

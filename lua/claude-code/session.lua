@@ -91,8 +91,8 @@ function Session.new(opts)
   self.chat = Chat.new({
     id = count,
     title = self.title,
-    on_submit = function(text)
-      return self:send(text)
+    on_submit = function(text, attachments)
+      return self:send(text, attachments)
     end,
     on_interrupt = function()
       self:interrupt()
@@ -304,8 +304,9 @@ function Session:finish_shell(command, shell, result)
 end
 
 ---@param text string
+---@param attachments? { label: string, image: claude_code.Image }[] Images to send with it.
 ---@return boolean sent
-function Session:send(text)
+function Session:send(text, attachments)
   local command = text:match("^!%s*(.-)%s*$")
   if command and command ~= "" then
     return self:run_shell(command)
@@ -324,15 +325,26 @@ function Session:send(text)
     vim.notify("claude-code: wait for the shell command to finish (or stop it)", vim.log.levels.WARN)
     return false
   end
+  -- Prepare images first: a failure (e.g. too large to shrink) keeps the prompt as it is.
+  local payload, shown = {}, {}
+  for _, a in ipairs(attachments or {}) do
+    local image, sent, err = require("claude-code.images").attachment(a.image)
+    if not image then
+      vim.notify(("claude-code: %s: %s"):format(a.label, err), vim.log.levels.ERROR)
+      return false
+    end
+    table.insert(payload, image)
+    table.insert(shown, { label = a.label, image = a.image, sent = sent })
+  end
   self:ensure_running()
   self.last_active = os.time()
-  self.chat.transcript:user_message(text)
+  self.chat.transcript:user_message(text, shown)
   self.busy = true
   self.in_reply = false
   self.reply_has_text = false
   self.interrupted = false
   self.chat:set_status({ activity = "Thinking" })
-  self.sidecar:send({ type = "prompt", text = text })
+  self.sidecar:send({ type = "prompt", text = text, images = #payload > 0 and payload or nil })
   return true
 end
 
@@ -636,9 +648,15 @@ function Session:replay(messages, total)
         for _, block in ipairs(content) do
           if block.type == "text" then
             table.insert(texts, block.text)
-          elseif block.type == "image" then
-            table.insert(texts, "[image]")
           end
+        end
+        -- Images: our placeholders are in the text already; otherwise mark them.
+        local placeholders = select(2, table.concat(texts, "\n"):gsub("%[Image #%d+%]", ""))
+        local count = #vim.tbl_filter(function(b)
+          return b.type == "image"
+        end, content)
+        for _ = placeholders + 1, count do
+          table.insert(texts, "[image]")
         end
       end
       local text = vim.trim(table.concat(texts, "\n"))

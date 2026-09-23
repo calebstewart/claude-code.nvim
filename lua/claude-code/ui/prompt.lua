@@ -4,6 +4,7 @@ local api = vim.api
 local config = require("claude-code.config")
 
 local ns = api.nvim_create_namespace("claude-code.prompt")
+local attach_ns = api.nvim_create_namespace("claude-code.prompt.attachments")
 
 ---@class claude_code.Prompt
 ---@field buf integer
@@ -12,6 +13,8 @@ local ns = api.nvim_create_namespace("claude-code.prompt")
 ---@field private history? string[] Snapshot taken when browsing starts.
 ---@field private history_index? integer Entry being shown; nil while editing a fresh prompt.
 ---@field private draft? string The fresh prompt, kept while browsing history.
+---@field private attachments { label: string, image: claude_code.Image }[] Images for the next send.
+---@field private image_count integer Numbers `[Image #N]`; keeps counting across sends.
 local Prompt = {}
 Prompt.__index = Prompt
 
@@ -24,12 +27,18 @@ function Prompt.new(name, on_change, session_id)
   vim.bo[buf].filetype = "claude-code-prompt"
   api.nvim_buf_set_name(buf, name)
   pcall(vim.treesitter.start, buf, "markdown")
-  local self = setmetatable({ buf = buf, session_id = session_id or function() end }, Prompt)
+  local self = setmetatable({
+    buf = buf,
+    session_id = session_id or function() end,
+    attachments = {},
+    image_count = 0,
+  }, Prompt)
 
   api.nvim_create_autocmd({ "TextChanged", "TextChangedI" }, {
     buffer = buf,
     callback = function()
       self:update_placeholder()
+      self:highlight_attachments()
       on_change()
     end,
   })
@@ -49,7 +58,52 @@ end
 function Prompt:clear()
   api.nvim_buf_set_lines(self.buf, 0, -1, false, {})
   self.history, self.history_index, self.draft = nil, nil, nil
+  self.attachments = {}
   self:update_placeholder()
+end
+
+--- Attach an image: insert its `[Image #N]` placeholder at the cursor.
+---@param image claude_code.Image
+function Prompt:attach(image)
+  self.image_count = self.image_count + 1
+  local label = ("[Image #%d]"):format(self.image_count)
+  table.insert(self.attachments, { label = label, image = image })
+  local win = vim.fn.bufwinid(self.buf)
+  if win ~= -1 and api.nvim_get_current_win() == win then
+    api.nvim_put({ label .. " " }, "c", api.nvim_get_mode().mode ~= "i", true)
+  else
+    local last = api.nvim_buf_line_count(self.buf)
+    local line = api.nvim_buf_get_lines(self.buf, last - 1, last, false)[1]
+    local text = (line == "" and "" or " ") .. label .. " "
+    api.nvim_buf_set_text(self.buf, last - 1, #line, last - 1, #line, { text })
+  end
+  self:update_placeholder()
+  self:highlight_attachments()
+end
+
+--- Attached images whose placeholder is still in `text` (deleting it drops the image).
+---@param text string
+---@return { label: string, image: claude_code.Image }[]
+function Prompt:attachments_in(text)
+  return vim.tbl_filter(function(a)
+    return text:find(a.label, 1, true) ~= nil
+  end, self.attachments)
+end
+
+---@private
+function Prompt:highlight_attachments()
+  api.nvim_buf_clear_namespace(self.buf, attach_ns, 0, -1)
+  if #self.attachments == 0 then
+    return
+  end
+  for row, line in ipairs(api.nvim_buf_get_lines(self.buf, 0, -1, false)) do
+    for start, stop in line:gmatch("()%[Image #%d+%]()") do
+      api.nvim_buf_set_extmark(self.buf, attach_ns, row - 1, start - 1, {
+        end_col = stop - 1,
+        hl_group = "ClaudeCodeAttachment",
+      })
+    end
+  end
 end
 
 --- Step through prompt history, like the CLI's up/down arrows. Only acts when

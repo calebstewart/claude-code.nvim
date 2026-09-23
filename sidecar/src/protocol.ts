@@ -24,6 +24,13 @@ export interface PromptRequest {
   text: string;
   /** false: add to the conversation without starting a turn (it's merged into the next one). */
   should_query?: boolean;
+  /** Images to send with the text (base64), e.g. pasted from the clipboard. */
+  images?: ImageAttachment[];
+}
+
+export interface ImageAttachment {
+  media_type: "image/png" | "image/jpeg" | "image/gif" | "image/webp";
+  data: string;
 }
 
 export interface InterruptRequest {

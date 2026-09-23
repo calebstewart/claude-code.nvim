@@ -122,6 +122,21 @@ function M.mode(mode)
   end)
 end
 
+--- Attach an image file to the prompt (opening the chat if needed).
+---@param path string
+function M.image(path)
+  if not path or path == "" then
+    vim.notify("claude-code: :Claude image <path>", vim.log.levels.WARN)
+    return
+  end
+  path = vim.fn.fnamemodify(vim.fn.expand(path), ":p")
+  M.open()
+  local s = sessions.current()
+  if s then
+    s.chat:attach_image(path)
+  end
+end
+
 --- Switch to the next/previous session open in this Neovim.
 function M.next()
   sessions.cycle(1)

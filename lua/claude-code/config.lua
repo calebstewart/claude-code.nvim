@@ -28,6 +28,7 @@ local M = {}
 ---@field close string|false Hide the chat (normal mode, transcript window).
 ---@field toggle_tool string[]|false Expand/collapse the tool call under the cursor (normal mode, transcript window).
 ---@field cycle_mode string|false Cycle the permission mode: default -> accept edits -> plan (prompt, both modes).
+---@field paste_image string|false Paste an image from the clipboard into the prompt (insert mode).
 
 ---@type claude_code.Config
 M.defaults = {
@@ -48,6 +49,7 @@ M.defaults = {
     close = "q",
     toggle_tool = { "<Tab>", "<CR>" },
     cycle_mode = "<S-Tab>",
+    paste_image = "<C-v>",
   },
   icons = "nerd",
   markdown = { enabled = true },

@@ -10,7 +10,7 @@ import {
   type SDKUserMessage,
 } from "@anthropic-ai/claude-agent-sdk";
 import { onLines, write } from "./io.js";
-import type { Inbound, InitRequest, Outbound } from "./protocol.js";
+import type { ImageAttachment, Inbound, InitRequest, Outbound } from "./protocol.js";
 
 function send(event: Outbound): void {
   write(event);
@@ -22,10 +22,21 @@ class Inbox implements AsyncIterable<SDKUserMessage> {
   private waiter: ((result: IteratorResult<SDKUserMessage>) => void) | undefined;
   private closed = false;
 
-  push(text: string, shouldQuery = true): void {
+  push(text: string, shouldQuery = true, images: ImageAttachment[] = []): void {
+    // Images go before the text, as the Messages API recommends.
+    const content: SDKUserMessage["message"]["content"] =
+      images.length === 0
+        ? text
+        : [
+            ...images.map((image) => ({
+              type: "image" as const,
+              source: { type: "base64" as const, media_type: image.media_type, data: image.data },
+            })),
+            { type: "text" as const, text },
+          ];
     const item: SDKUserMessage = {
       type: "user",
-      message: { role: "user", content: text },
+      message: { role: "user", content },
       parent_tool_use_id: null,
       ...(shouldQuery ? {} : { shouldQuery: false }),
     };
@@ -141,7 +152,7 @@ function handle(request: Inbound): void {
         });
       return;
     case "prompt":
-      inbox.push(request.text, request.should_query ?? true);
+      inbox.push(request.text, request.should_query ?? true, request.images);
       return;
     case "set_permission_mode":
       session?.setPermissionMode(request.mode).catch((err: unknown) => {

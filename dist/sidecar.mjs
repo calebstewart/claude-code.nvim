@@ -36613,10 +36613,17 @@ var Inbox = class {
   items = [];
   waiter;
   closed = false;
-  push(text, shouldQuery = true) {
+  push(text, shouldQuery = true, images = []) {
+    const content = images.length === 0 ? text : [
+      ...images.map((image) => ({
+        type: "image",
+        source: { type: "base64", media_type: image.media_type, data: image.data }
+      })),
+      { type: "text", text }
+    ];
     const item = {
       type: "user",
-      message: { role: "user", content: text },
+      message: { role: "user", content },
       parent_tool_use_id: null,
       ...shouldQuery ? {} : { shouldQuery: false }
     };
@@ -36714,7 +36721,7 @@ function handle(request) {
       });
       return;
     case "prompt":
-      inbox.push(request.text, request.should_query ?? true);
+      inbox.push(request.text, request.should_query ?? true, request.images);
       return;
     case "set_permission_mode":
       session?.setPermissionMode(request.mode).catch((err) => {

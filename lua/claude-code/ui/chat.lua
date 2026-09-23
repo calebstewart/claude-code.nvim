@@ -13,6 +13,43 @@ local icons = require("claude-code.ui.icons")
 local Prompt = require("claude-code.ui.prompt")
 local Transcript = require("claude-code.ui.transcript")
 local welcome = require("claude-code.ui.welcome")
+local images = require("claude-code.images")
+
+--- Prompt buffer -> chat, for pastes of image paths (see install_paste_hook).
+---@type table<integer, claude_code.Chat>
+local prompts = {}
+
+--- A pasted (or dragged-in) image path, as terminals deliver it: maybe quoted,
+--- maybe with backslash-escaped spaces.
+---@param text string
+---@return string
+local function unescape_path(text)
+  text = vim.trim(text)
+  text = text:match([[^'(.*)'$]]) or text:match([[^"(.*)"$]]) or text:gsub("\\(.)", "%1")
+  return vim.fn.expand(text)
+end
+
+--- Pasting a path to an image into a prompt attaches the image. Wraps vim.paste,
+--- touching nothing but single-line pastes into a chat prompt.
+local function install_paste_hook()
+  if vim.g.claude_code_paste_hook then
+    return
+  end
+  vim.g.claude_code_paste_hook = true
+  local paste = vim.paste
+  vim.paste = function(lines, phase)
+    local chat = prompts[api.nvim_get_current_buf()]
+    local text = lines[1]
+    if chat and phase == -1 and text and (#lines == 1 or (#lines == 2 and lines[2] == "")) then
+      local path = unescape_path(text)
+      if images.is_image(path) then
+        chat:attach_image(path)
+        return true
+      end
+    end
+    return paste(lines, phase)
+  end
+end
 
 ---@class claude_code.ChatStatus
 ---@field activity? string What Claude is doing; nil when idle.
@@ -24,7 +61,7 @@ local welcome = require("claude-code.ui.welcome")
 
 ---@class claude_code.ChatOpts
 ---@field id integer
----@field on_submit fun(text: string): boolean Returns false to keep the prompt text.
+---@field on_submit fun(text: string, attachments: { label: string, image: claude_code.Image }[]): boolean Returns false to keep the prompt text.
 ---@field on_interrupt fun()
 ---@field session_id? fun(): string? Claude session id, recorded with history entries.
 ---@field title? string
@@ -68,6 +105,8 @@ function Chat.new(opts)
   self.slash = require("claude-code.ui.slash").attach(self.prompt.buf, function()
     return opts.commands and opts.commands() or {}
   end)
+  prompts[self.prompt.buf] = self
+  install_paste_hook()
   self.dock = api.nvim_create_buf(false, true)
   vim.bo[self.dock].filetype = "claude-code-dock"
   self:apply_keymaps()
@@ -301,11 +340,38 @@ function Chat:submit()
   if text == "" then
     return
   end
-  if self.opts.on_submit(text) then
+  if self.opts.on_submit(text, self.prompt:attachments_in(text)) then
     require("claude-code.history").add(text, self.opts.session_id and self.opts.session_id())
     self.prompt:clear()
     self:layout()
   end
+end
+
+--- Attach an image file to the prompt.
+---@param path string
+function Chat:attach_image(path)
+  local image, err = images.inspect(path)
+  if not image then
+    vim.notify("claude-code: " .. err, vim.log.levels.ERROR)
+    return
+  end
+  self.prompt:attach(image)
+end
+
+--- Paste the clipboard's image into the prompt; with no image there, paste its text.
+function Chat:paste_image()
+  images.from_clipboard(function(path)
+    if path then
+      self:attach_image(path)
+      return
+    end
+    local text = vim.fn.getreg("+")
+    if text ~= "" then
+      api.nvim_paste(text, true, -1)
+    else
+      vim.notify("claude-code: no image on the clipboard", vim.log.levels.WARN)
+    end
+  end)
 end
 
 --- (Re)install the chat's buffer-local keymaps.
@@ -354,6 +420,9 @@ function Chat:apply_keymaps()
       self:focus_prompt(true)
     end, "focus prompt")
   end
+  map(self.prompt.buf, "i", keys.paste_image, function()
+    self:paste_image()
+  end, "paste image from clipboard")
   if keys.cycle_mode and self.opts.on_cycle_mode then
     map(self.prompt.buf, { "n", "i" }, keys.cycle_mode, self.opts.on_cycle_mode, "cycle permission mode")
     map(self.transcript.buf, "n", keys.cycle_mode, self.opts.on_cycle_mode, "cycle permission mode")
@@ -506,6 +575,7 @@ function Chat:wipe()
   self:destroy()
   self:hide()
   pcall(api.nvim_del_augroup_by_id, self.augroup)
+  prompts[self.prompt.buf] = nil
   for _, buf in ipairs({ self.transcript.buf, self.prompt.buf, self.dock }) do
     if api.nvim_buf_is_valid(buf) then
       api.nvim_buf_delete(buf, { force = true })

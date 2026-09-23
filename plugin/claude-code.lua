@@ -31,6 +31,9 @@ local subcommands = {
   mode = function(args)
     require("claude-code").mode(args)
   end,
+  image = function(args)
+    require("claude-code").image(args)
+  end,
   next = function()
     require("claude-code").next()
   end,
@@ -54,6 +57,9 @@ end, {
   nargs = "*",
   desc = "Claude Code",
   complete = function(arg_lead, line)
+    if line:match("^%S+%s+image%s+") then
+      return vim.fn.getcompletion(arg_lead, "file")
+    end
     if line:match("^%S+%s+mode%s+%S*$") then
       return vim.tbl_filter(function(mode)
         return vim.startswith(mode, arg_lead)

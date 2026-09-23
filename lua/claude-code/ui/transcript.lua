@@ -145,21 +145,63 @@ function Transcript:start_turn(role)
   return row
 end
 
+---@param bytes integer
+local function size(bytes)
+  if bytes >= 1024 * 1024 then
+    return ("%.1f MB"):format(bytes / 1024 / 1024)
+  end
+  return ("%d KB"):format(math.max(math.floor(bytes / 1024 + 0.5), 1))
+end
+
+---@class claude_code.SentImage
+---@field label string `[Image #N]`
+---@field image claude_code.Image As attached.
+---@field sent claude_code.Image As sent (shrunk, if it was too large).
+
 ---@param text string
-function Transcript:user_message(text)
+---@param images? claude_code.SentImage[] Attached images, described under the message.
+function Transcript:user_message(text, images)
   if not self:valid() then
     return
   end
   require("claude-code.ui.welcome").clear(self.buf)
   local first = self:start_turn("user")
   self:write(text)
-  for row = first, self:last_row() do
+  local last = self:last_row()
+  for row = first, last do
     api.nvim_buf_set_extmark(self.buf, ns, row, 0, {
       virt_text = { { "▎ ", "ClaudeCodeUserBar" } },
       virt_text_pos = "inline",
       line_hl_group = "ClaudeCodeUserBlock",
       right_gravity = false,
     })
+    -- Image placeholders: highlighted, with an image icon.
+    local line = self:line(row)
+    for start, stop in line:gmatch("()%[Image #%d+%]()") do
+      api.nvim_buf_set_extmark(self.buf, ns, row, start - 1, {
+        end_col = stop - 1,
+        hl_group = "ClaudeCodeAttachment",
+        virt_text = { { icons.get().image .. " ", "ClaudeCodeAttachment" } },
+        virt_text_pos = "inline",
+      })
+    end
+  end
+  if images and #images > 0 then
+    local details = {}
+    for _, img in ipairs(images) do
+      local a, s = img.image, img.sent
+      local desc = ("%s %s"):format(img.label, vim.fn.fnamemodify(a.path, ":t"))
+      local dims = a.width and ("%d×%d"):format(a.width, a.height) or nil
+      local parts = { desc, dims, size(a.bytes) }
+      if s.path ~= a.path then
+        table.insert(parts, ("sent as %s%s"):format(s.width and ("%d×%d "):format(s.width, s.height) or "", size(s.bytes)))
+      end
+      table.insert(details, {
+        { "  ⎿  ", "ClaudeCodeToolGutter" },
+        { table.concat(vim.tbl_filter(function(p) return p ~= nil end, parts), " · "), "ClaudeCodeMuted" },
+      })
+    end
+    api.nvim_buf_set_extmark(self.buf, ns, last, 0, { virt_lines = details })
   end
   self.pending_break = true
 end
