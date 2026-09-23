@@ -69,7 +69,7 @@ function Session.new(opts)
     persisted = info ~= nil,
     busy = false,
     last_active = info and math.floor((info.lastModified or 0) / 1000) or os.time(),
-    mode = config.options.permission_mode,
+    mode = config.options.permission_mode or modes.settings_default(info and info.cwd or vim.fn.getcwd()),
     suspending = false,
     in_reply = false,
     reply_has_text = false,
@@ -136,7 +136,8 @@ function Session:start()
   local sidecar
   sidecar = Sidecar.new({
     on_event = function(event)
-      if self.sidecar == sidecar then
+      -- Events can still arrive after the session was closed and its chat wiped.
+      if self.sidecar == sidecar and self.chat:valid() then
         self:on_event(event)
       end
     end,

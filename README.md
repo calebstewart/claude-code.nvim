@@ -97,7 +97,7 @@ Defaults:
     interrupt = "<C-c>",     -- normal mode, transcript and prompt
     close = "q",             -- normal mode, transcript
     toggle_tool = { "<Tab>", "<CR>" }, -- normal mode, transcript: expand/collapse tool output
-    cycle_mode = "<S-Tab>",  -- prompt and transcript: cycle default → accept edits → plan
+    cycle_mode = "<S-Tab>",  -- prompt and transcript: cycle default → accept edits → plan → auto
   },
   icons = "nerd",            -- "nerd" (needs a Nerd Font) | "unicode"
   markdown = { enabled = true }, -- shaded code blocks, bullets, rules, quote bars; disable if you use render-markdown.nvim
@@ -127,9 +127,16 @@ doing, the model and the session cost.
 ### Permission modes
 
 The prompt's bottom border shows the current mode when it isn't the default (`⏵⏵ accept edits`,
-`⏸ plan mode`, …). `<S-Tab>` cycles default → accept edits → plan, like the CLI's shift+tab, and
-`:Claude mode [mode]` sets any mode (or pick one from a list). Modes changed by Claude Code itself, such as
-leaving plan mode, are reflected too, and a session keeps its mode when it's suspended and resumed.
+`⏸ plan mode`, `⏵ auto mode`, …). `<S-Tab>` cycles default → accept edits → plan → auto, like the CLI's
+shift+tab, and `:Claude mode [mode]` sets any mode (or pick one from a list). Modes changed by Claude Code
+itself, such as leaving plan mode, are reflected too, and a session keeps its mode when it's suspended and
+resumed.
+
+New sessions start in `permission_mode` if you set one, otherwise in `permissions.defaultMode` from your Claude
+Code settings (`.claude/settings.local.json`, `.claude/settings.json`, then `~/.claude/settings.json`).
+
+As in the CLI, accept edits only auto-approves file edits and simple file operations in the project; other
+shell commands still ask. Auto mode lets Claude Code's classifier approve safe actions.
 
 `bypassPermissions` can only be a session's starting mode (the SDK requires it to be chosen up front), so set
 it with `permission_mode` in `setup()`.

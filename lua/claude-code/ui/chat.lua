@@ -303,6 +303,9 @@ end
 
 --- (Re)install the chat's buffer-local keymaps.
 function Chat:apply_keymaps()
+  if not self:valid() then
+    return
+  end
   local keys = config.options.keymaps
   local function map(buf, mode, lhs, rhs, desc)
     if lhs then

@@ -1,5 +1,5 @@
--- Claude Code's permission modes: names, how they're shown, and the cycle order
--- (as the CLI's shift+tab).
+-- Claude Code's permission modes: names, how they're shown, the cycle order
+-- (as the CLI's shift+tab), and the starting mode from Claude Code's settings.
 
 local M = {}
 
@@ -8,13 +8,13 @@ M.all = { "default", "acceptEdits", "plan", "auto", "dontAsk", "bypassPermission
 
 --- What <S-Tab> steps through.
 ---@type claude_code.PermissionMode[]
-M.cycle = { "default", "acceptEdits", "plan" }
+M.cycle = { "default", "acceptEdits", "plan", "auto" }
 
 local labels = {
   default = "default",
   acceptEdits = "⏵⏵ accept edits",
   plan = "⏸ plan mode",
-  auto = "⏵ auto",
+  auto = "⏵ auto mode",
   dontAsk = "don't ask",
   bypassPermissions = "⏵⏵ bypass permissions",
 }
@@ -24,6 +24,38 @@ local highlights = {
   plan = "ClaudeCodeModePlan",
   bypassPermissions = "ClaudeCodeModeBypass",
 }
+
+--- `permissions.defaultMode` from Claude Code's settings for `cwd`, highest
+--- precedence first: local project, project, then user settings.
+---
+--- The SDK only passes a mode to Claude Code when given one, and SDK sessions
+--- don't pick up every `defaultMode` on their own (notably "auto"), so the
+--- plugin reads it and passes it explicitly.
+---@param cwd string
+---@return claude_code.PermissionMode?
+function M.settings_default(cwd)
+  local home = vim.env.CLAUDE_CONFIG_DIR or vim.fs.joinpath(vim.env.HOME or "~", ".claude")
+  local files = {
+    vim.fs.joinpath(cwd, ".claude", "settings.local.json"),
+    vim.fs.joinpath(cwd, ".claude", "settings.json"),
+    vim.fs.joinpath(home, "settings.json"),
+  }
+  for _, path in ipairs(files) do
+    local f = io.open(path, "r")
+    if f then
+      local ok, settings = pcall(vim.json.decode, f:read("*a"))
+      f:close()
+      local mode = ok and type(settings) == "table" and type(settings.permissions) == "table"
+        and settings.permissions.defaultMode
+      if mode == "manual" then
+        mode = "default" -- documented alias
+      end
+      if type(mode) == "string" and M.valid(mode) then
+        return mode
+      end
+    end
+  end
+end
 
 ---@param mode string
 function M.valid(mode)
