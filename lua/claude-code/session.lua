@@ -20,6 +20,13 @@ local tools = require("claude-code.ui.tools")
 ---@field last_active integer os.time() of the last activity.
 ---@field mode? claude_code.PermissionMode Current permission mode (nil until Claude Code reports it).
 ---@field private started_mode? claude_code.PermissionMode Mode the process was started in.
+---@field private commands claude_code.SlashCommand[] From the SDK.
+---@field private terminal_commands table<string, true> Commands tied to the CLI's terminal UI.
+---@field private streamed table<string, true> Assistant message ids whose text arrived as stream events.
+---@field private shell? { job: vim.SystemObj, id: string, killed: boolean } A running `!command`.
+---@field private shell_count integer
+---@field private replay_shell? string Replaying: id of the `!command` awaiting its output.
+---@field private silent_results integer Results still to come from context-only messages (they have no turn to finish).
 ---@field private persisted boolean Its transcript exists on disk (so it can be resumed).
 ---@field private sidecar? claude_code.Sidecar
 ---@field private permissions claude_code.Permissions
@@ -70,6 +77,11 @@ function Session.new(opts)
     busy = false,
     last_active = info and math.floor((info.lastModified or 0) / 1000) or os.time(),
     mode = config.options.permission_mode or modes.settings_default(info and info.cwd or vim.fn.getcwd()),
+    commands = {},
+    terminal_commands = {},
+    streamed = {},
+    shell_count = 0,
+    silent_results = 0,
     suspending = false,
     in_reply = false,
     reply_has_text = false,
@@ -93,6 +105,9 @@ function Session.new(opts)
     end,
     on_cycle_mode = function()
       self:set_mode(modes.next(self.mode))
+    end,
+    commands = function()
+      return self:slash_commands()
     end,
   })
   self.permissions = Permissions.new(self.chat, function(id, answer)
@@ -200,9 +215,101 @@ end
 --- Prompts that end the session, as in the Claude Code CLI.
 local EXIT_COMMANDS = { ["/exit"] = true, ["/quit"] = true, ["exit"] = true }
 
+--- Run a `!command` here (not through Claude), as the CLI's bash mode does, and
+--- add the command and its output to the conversation in the CLI's format.
+---@private
+---@param command string
+---@return boolean started
+function Session:run_shell(command)
+  if self.shell then
+    local key = require("claude-code.ui.icons").key(config.options.keymaps.interrupt or "<C-c>")
+    vim.notify(("claude-code: a shell command is already running (%s stops it)"):format(key), vim.log.levels.WARN)
+    return false
+  end
+  local transcript = self.chat.transcript
+  self.shell_count = self.shell_count + 1
+  local id = "shell-" .. self.shell_count
+  transcript:start_turn("user")
+  transcript:tool_use(id, "Shell", { command = command })
+  self.in_reply, self.reply_has_text = false, false
+  self.last_active = os.time()
+
+  local shell = { id = id, killed = false }
+  self.shell = shell
+  if not self.busy then
+    self.chat:set_status({ activity = "Running !" .. command:gsub("\n.*", " …") })
+  end
+  shell.job = vim.system({ vim.o.shell, vim.o.shellcmdflag, command }, { cwd = self.cwd, text = true }, function(result)
+    vim.schedule(function()
+      self:finish_shell(command, shell, result)
+    end)
+  end)
+  return true
+end
+
+---@private
+---@param command string
+---@param shell { id: string, killed: boolean }
+---@param result vim.SystemCompleted
+function Session:finish_shell(command, shell, result)
+  if self.shell == shell then
+    self.shell = nil
+  end
+  if not self.chat:valid() then
+    return
+  end
+  local stdout = vim.trim(result.stdout or "")
+  local stderr = vim.trim(result.stderr or "")
+  if shell.killed then
+    stderr = vim.trim(stderr .. "\nCommand interrupted")
+  elseif result.code ~= 0 and stderr == "" then
+    stderr = ("Exit code %d"):format(result.code)
+  end
+  local shown = vim.trim(stdout .. (stderr ~= "" and ("\n" .. stderr) or ""))
+  self.chat.transcript:tool_result(shell.id, (shell.killed or result.code ~= 0) and "error" or "success", shown)
+
+  local max = config.options.shell.max_output
+  local function cap(text)
+    if #text > max then
+      return text:sub(1, max) .. ("\n… (%d more characters)"):format(#text - max)
+    end
+    return text
+  end
+  -- Claude responds once it exits (as in the CLI), unless you stopped it or Claude
+  -- is mid-turn; then it's just context for the next turn.
+  local respond = config.options.shell.respond and not shell.killed and not self.busy
+  self:ensure_running()
+  -- The CLI's tags, in one message: Claude Code treats a message that starts with
+  -- <bash-stdout> as local output and never queries the model for it.
+  self.sidecar:send({
+    type = "prompt",
+    text = ("<bash-input>%s</bash-input><bash-stdout>%s</bash-stdout><bash-stderr>%s</bash-stderr>"):format(
+      command,
+      stdout == "" and stderr == "" and "(Bash completed with no output)" or cap(stdout),
+      cap(stderr)
+    ),
+    should_query = respond,
+  })
+  if not respond then
+    -- A context-only message still produces a (turnless) result; don't treat it as a turn ending.
+    self.silent_results = self.silent_results + 1
+  end
+  if respond then
+    self.busy = true
+    self.interrupted = false
+    self.chat:set_status({ activity = "Thinking" })
+  elseif not self.busy then
+    self.chat:set_status({ activity = nil })
+  end
+end
+
 ---@param text string
 ---@return boolean sent
 function Session:send(text)
+  local command = text:match("^!%s*(.-)%s*$")
+  if command and command ~= "" then
+    return self:run_shell(command)
+  end
   if EXIT_COMMANDS[vim.trim(text)] then
     require("claude-code.sessions").close(self)
     vim.notify(("claude-code: ended “%s”; resume it from :Claude sessions"):format(self.title or "New session"))
@@ -211,6 +318,10 @@ function Session:send(text)
   end
   if self.busy then
     vim.notify("claude-code: Claude is still working; interrupt it first", vim.log.levels.WARN)
+    return false
+  end
+  if self.shell then
+    vim.notify("claude-code: wait for the shell command to finish (or stop it)", vim.log.levels.WARN)
     return false
   end
   self:ensure_running()
@@ -226,11 +337,41 @@ function Session:send(text)
 end
 
 function Session:interrupt()
+  if self.shell then
+    -- A running `!command` is what you're waiting on: stop that first.
+    self.shell.killed = true
+    self.shell.job:kill("sigterm")
+    return
+  end
   if self.busy and self:running() then
     self.interrupted = true
     self.chat:set_status({ activity = "Interrupting" })
     self.sidecar:send({ type = "interrupt" })
   end
+end
+
+--- Handled by the plugin itself rather than Claude Code.
+local LOCAL_COMMANDS = {
+  { name = "exit", description = "End this session (it stays saved; resume it from :Claude sessions)", builtin = true },
+  { name = "quit", description = "End this session", builtin = true },
+}
+
+--- Slash commands to offer: the SDK's, minus ones tied to the CLI's terminal UI,
+--- plus the plugin's own.
+---@return claude_code.SlashCommand[]
+function Session:slash_commands()
+  local out, seen = {}, {}
+  for _, c in ipairs(LOCAL_COMMANDS) do
+    table.insert(out, c)
+    seen[c.name] = true
+  end
+  for _, c in ipairs(self.commands) do
+    if not seen[c.name] and not self.terminal_commands[c.name] then
+      table.insert(out, c)
+      seen[c.name] = true
+    end
+  end
+  return out
 end
 
 --- Switch permission mode (takes effect immediately if running, else on start).
@@ -296,6 +437,8 @@ function Session:on_event(event)
     if not self.busy then
       self.chat:set_status({ activity = nil })
     end
+  elseif event.type == "commands" then
+    self.commands = event.commands or {}
   elseif event.type == "sdk" then
     self:on_sdk_message(event.message --[[@as table]])
   elseif event.type == "permission_request" then
@@ -321,10 +464,20 @@ function Session:on_sdk_message(msg)
     self.mode = msg.permissionMode
     self.chat:set_status({ activity = self.chat:activity(), mode = self.mode })
   end
+  if msg.type == "system" and msg.subtype == "commands_changed" then
+    self.commands = msg.commands or self.commands
+  end
   if msg.type == "system" and msg.subtype == "init" then
+    self.terminal_commands = {}
+    for _, name in ipairs(msg.terminal_slash_commands or {}) do
+      self.terminal_commands[(name:gsub("^/", ""))] = true
+    end
     self.chat:set_status({ activity = self.busy and "Thinking" or nil, model = msg.model })
   elseif msg.type == "stream_event" then
     local ev = msg.event
+    if ev.type == "message_start" and ev.message and ev.message.id then
+      self.streamed[ev.message.id] = true
+    end
     if ev.type == "content_block_start" then
       local block = ev.content_block
       if block.type == "text" then
@@ -344,9 +497,19 @@ function Session:on_sdk_message(msg)
       self.reply_has_text = true
     end
   elseif msg.type == "assistant" then
-    -- Text already streamed in via stream_event; the full message is where tool calls are complete.
+    -- Text normally streamed in via stream_event already; the full message is where
+    -- tool calls are complete. Messages that weren't streamed (e.g. output of a
+    -- built-in slash command like /context) carry their text only here.
+    local streamed = msg.message.id and self.streamed[msg.message.id]
     for _, block in ipairs(msg.message.content or {}) do
-      if block.type == "tool_use" then
+      if block.type == "text" and not streamed and vim.trim(block.text or "") ~= "" then
+        self:reply()
+        if self.reply_has_text then
+          transcript:paragraph_break()
+        end
+        transcript:append(block.text)
+        self.reply_has_text = true
+      elseif block.type == "tool_use" then
         self:reply()
         transcript:tool_use(block.id, block.name, block.input or {})
         self:activity("Running " .. block.name)
@@ -355,7 +518,11 @@ function Session:on_sdk_message(msg)
   elseif msg.type == "user" then
     self:tool_results(msg.message and msg.message.content)
   elseif msg.type == "result" then
-    self:finish_turn(msg)
+    if (msg.num_turns or 0) == 0 and self.silent_results > 0 then
+      self.silent_results = self.silent_results - 1
+    else
+      self:finish_turn(msg)
+    end
   end
 end
 
@@ -475,7 +642,27 @@ function Session:replay(messages, total)
         end
       end
       local text = vim.trim(table.concat(texts, "\n"))
-      if text:match("^%[Request interrupted by user") then
+      -- `!commands`: the CLI stores input and output as two messages; we send one.
+      local bash_input = text:match("^<bash%-input>(.-)</bash%-input>")
+      local bash_stdout = text:match("<bash%-stdout>(.-)</bash%-stdout>")
+      if bash_input then
+        -- A `!command` (from here or the CLI).
+        self.shell_count = self.shell_count + 1
+        self.replay_shell = "shell-" .. self.shell_count
+        transcript:start_turn("user")
+        transcript:tool_use(self.replay_shell, "Shell", { command = bash_input })
+        self.in_reply, self.reply_has_text = false, false
+      end
+      if bash_input and not bash_stdout then
+        -- output follows in the next message
+      elseif bash_stdout and self.replay_shell then
+        local stderr = text:match("<bash%-stderr>(.-)</bash%-stderr>") or ""
+        local out = vim.trim(bash_stdout:gsub("^%(Bash completed with no output%)$", "") .. "\n" .. stderr)
+        transcript:tool_result(self.replay_shell, stderr ~= "" and "error" or "success", out)
+        self.replay_shell = nil
+      elseif bash_input then
+        -- handled above
+      elseif text:match("^%[Request interrupted by user") then
         transcript:footer("Interrupted")
       elseif text ~= "" and not hidden_user_text(text) then
         transcript:user_message(text)

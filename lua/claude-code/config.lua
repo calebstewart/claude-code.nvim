@@ -14,6 +14,7 @@ local M = {}
 ---@field tool_output { max_lines: integer } Line cap for expanded tool output.
 ---@field history { share: boolean } Share prompt history with the Claude Code CLI (~/.claude/history.jsonl).
 ---@field sessions { idle_timeout: integer|false } Minutes before an idle background session's process is stopped (it resumes on demand).
+---@field shell { respond: boolean, max_output: integer } `!command` prompts: whether Claude responds once the command exits, and how much output (characters) it's given.
 
 ---@class claude_code.WindowConfig
 ---@field position "right"|"left"|"top"|"bottom"
@@ -53,6 +54,7 @@ M.defaults = {
   tool_output = { max_lines = 40 },
   history = { share = true },
   sessions = { idle_timeout = 15 },
+  shell = { respond = true, max_output = 30000 },
 }
 
 ---@type claude_code.Config

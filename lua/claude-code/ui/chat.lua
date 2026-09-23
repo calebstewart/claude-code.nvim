@@ -30,6 +30,7 @@ local welcome = require("claude-code.ui.welcome")
 ---@field title? string
 ---@field on_show? fun() Called after the chat is shown (e.g. to present deferred cards).
 ---@field on_cycle_mode? fun() The cycle-mode key was pressed.
+---@field commands? fun(): claude_code.SlashCommand[] Slash commands for completion.
 
 ---@class claude_code.Chat
 ---@field transcript claude_code.Transcript
@@ -42,6 +43,7 @@ local welcome = require("claude-code.ui.welcome")
 ---@field private frame integer
 ---@field private title? string
 ---@field private augroup integer
+---@field private slash { menu_open: fun(): boolean }
 local Chat = {}
 Chat.__index = Chat
 
@@ -63,6 +65,9 @@ function Chat.new(opts)
   self.prompt = Prompt.new(("claude://prompt/%d"):format(opts.id), function()
     self:layout()
   end, opts.session_id)
+  self.slash = require("claude-code.ui.slash").attach(self.prompt.buf, function()
+    return opts.commands and opts.commands() or {}
+  end)
   self.dock = api.nvim_create_buf(false, true)
   vim.bo[self.dock].filetype = "claude-code-dock"
   self:apply_keymaps()
@@ -325,10 +330,13 @@ function Chat:apply_keymaps()
   for _, lhs in ipairs(config.keys(keys.submit.i)) do
     map(self.prompt.buf, "i", lhs, submit, "send prompt")
   end
-  -- Up/Down recall earlier prompts when the cursor is on the first/last line.
-  for _, dir in ipairs({ { "<Up>", -1 }, { "<Down>", 1 } }) do
+  -- Up/Down move through the slash-command menu when it's open; otherwise they
+  -- recall earlier prompts when the cursor is on the first/last line.
+  for _, dir in ipairs({ { "<Up>", -1, "<C-p>" }, { "<Down>", 1, "<C-n>" } }) do
     map(self.prompt.buf, { "n", "i" }, dir[1], function()
-      if not self.prompt:recall(dir[2]) then
+      if self.slash.menu_open() then
+        api.nvim_feedkeys(api.nvim_replace_termcodes(dir[3], true, false, true), "n", false)
+      elseif not self.prompt:recall(dir[2]) then
         api.nvim_feedkeys(api.nvim_replace_termcodes(dir[1], true, false, true), "n", false)
       end
     end, dir[2] < 0 and "previous prompt" or "next prompt")
@@ -452,7 +460,11 @@ function Chat:render_status()
   -- input), key hints on the right.
   local right_hints = { { " " .. table.concat(hints, " · ") .. " ", "ClaudeCodeMuted" } }
   local mode_chunks = {}
-  if s.mode and s.mode ~= "default" then
+  local first = self.prompt:valid() and api.nvim_buf_get_lines(self.prompt.buf, 0, 1, false)[1] or ""
+  if first:sub(1, 1) == "!" then
+    -- Like the CLI's bash mode indicator.
+    mode_chunks = { { " ! shell command", "ClaudeCodeShellMode" }, { " (runs here, not by Claude) ", "ClaudeCodeMuted" } }
+  elseif s.mode and s.mode ~= "default" then
     local label, mode_hl = require("claude-code.modes").display(s.mode)
     local cycle = keys.cycle_mode and (" (" .. icons.key(keys.cycle_mode) .. ")") or ""
     mode_chunks = { { " " .. label, mode_hl }, { cycle .. " ", "ClaudeCodeMuted" } }

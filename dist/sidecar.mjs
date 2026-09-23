@@ -36613,11 +36613,12 @@ var Inbox = class {
   items = [];
   waiter;
   closed = false;
-  push(text) {
+  push(text, shouldQuery = true) {
     const item = {
       type: "user",
       message: { role: "user", content: text },
-      parent_tool_use_id: null
+      parent_tool_use_id: null,
+      ...shouldQuery ? {} : { shouldQuery: false }
     };
     if (this.waiter) {
       const resolve5 = this.waiter;
@@ -36691,6 +36692,8 @@ async function run(init) {
     }
   });
   send({ type: "ready", session_id: sessionId });
+  session.supportedCommands().then((commands) => send({ type: "commands", commands })).catch(() => {
+  });
   for await (const message of session) {
     send({ type: "sdk", message });
   }
@@ -36711,7 +36714,7 @@ function handle(request) {
       });
       return;
     case "prompt":
-      inbox.push(request.text);
+      inbox.push(request.text, request.should_query ?? true);
       return;
     case "set_permission_mode":
       session?.setPermissionMode(request.mode).catch((err) => {

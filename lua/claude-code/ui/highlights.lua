@@ -94,6 +94,7 @@ local function apply()
     ClaudeCodeModePlan = { fg = accent("Type", 0x56b6c2), bold = true },
     ClaudeCodeModeBypass = { fg = err, bold = true },
     ClaudeCodeModeOther = { fg = warn, bold = true },
+    ClaudeCodeShellMode = { fg = accent("Statement", 0xe06c75), bold = true },
     -- Question picker
     ClaudeCodePicker = { link = "NormalFloat" },
     ClaudeCodePickerBorder = { fg = blend(claude, bg, 0.6) },

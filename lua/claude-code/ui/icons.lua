@@ -53,6 +53,7 @@ local sets = {
       TodoWrite = "\u{f45e}", -- oct-checklist
       AskUserQuestion = "\u{f128}", -- fa-question
       ExitPlanMode = "\u{f022}", -- fa-list_alt
+      Shell = "\u{f489}", -- oct-terminal (a `!command` you ran)
       default = "\u{f423}", -- oct-gear
     },
   },
@@ -87,6 +88,7 @@ local sets = {
       TodoWrite = "☐",
       AskUserQuestion = "?",
       ExitPlanMode = "☰",
+      Shell = "$",
       default = "•",
     },
   },

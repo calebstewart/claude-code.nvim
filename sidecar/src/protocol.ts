@@ -1,7 +1,7 @@
 // Wire protocol between Neovim and the sidecar: one JSON object per line on stdio.
 // Keep in sync with the annotations in lua/claude-code/sidecar.lua.
 
-import type { PermissionMode, SDKMessage } from "@anthropic-ai/claude-agent-sdk";
+import type { PermissionMode, SDKMessage, SlashCommand } from "@anthropic-ai/claude-agent-sdk";
 
 // Neovim -> sidecar
 
@@ -22,6 +22,8 @@ export interface InitRequest {
 export interface PromptRequest {
   type: "prompt";
   text: string;
+  /** false: add to the conversation without starting a turn (it's merged into the next one). */
+  should_query?: boolean;
 }
 
 export interface InterruptRequest {
@@ -55,6 +57,12 @@ export interface ReadyEvent {
   type: "ready";
   /** Known up front (we choose it), so the first prompt can be tagged with it. */
   session_id: string;
+}
+
+/** Slash commands available to the session (later changes arrive as system/commands_changed). */
+export interface CommandsEvent {
+  type: "commands";
+  commands: SlashCommand[];
 }
 
 /** A raw SDK message, forwarded untouched so the Lua side decides how to render it. */
@@ -97,6 +105,7 @@ export interface ExitEvent {
 
 export type Outbound =
   | ReadyEvent
+  | CommandsEvent
   | SdkEvent
   | PermissionRequestEvent
   | PermissionCancelEvent

@@ -22,11 +22,12 @@ class Inbox implements AsyncIterable<SDKUserMessage> {
   private waiter: ((result: IteratorResult<SDKUserMessage>) => void) | undefined;
   private closed = false;
 
-  push(text: string): void {
+  push(text: string, shouldQuery = true): void {
     const item: SDKUserMessage = {
       type: "user",
       message: { role: "user", content: text },
       parent_tool_use_id: null,
+      ...(shouldQuery ? {} : { shouldQuery: false }),
     };
     if (this.waiter) {
       const resolve = this.waiter;
@@ -112,6 +113,10 @@ async function run(init: InitRequest): Promise<void> {
     },
   });
   send({ type: "ready", session_id: sessionId });
+  session
+    .supportedCommands()
+    .then((commands) => send({ type: "commands", commands }))
+    .catch(() => {});
   for await (const message of session) {
     send({ type: "sdk", message });
   }
@@ -136,7 +141,7 @@ function handle(request: Inbound): void {
         });
       return;
     case "prompt":
-      inbox.push(request.text);
+      inbox.push(request.text, request.should_query ?? true);
       return;
     case "set_permission_mode":
       session?.setPermissionMode(request.mode).catch((err: unknown) => {

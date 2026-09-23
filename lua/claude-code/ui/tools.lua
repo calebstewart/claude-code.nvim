@@ -132,7 +132,7 @@ function M.body(name, input, result, width)
   local lines ---@type claude_code.Chunk[]
   if name == "Edit" or name == "MultiEdit" or name == "Write" then
     lines = M.diff_lines(input)
-  elseif name == "Bash" and type(input.command) == "string" then
+  elseif (name == "Bash" or name == "Shell") and type(input.command) == "string" then
     lines = { { "$ " .. input.command:gsub("\n", " "), "ClaudeCodeToolDetail" } }
     for _, line in ipairs(vim.split(vim.trim(result or ""), "\n", { plain = true })) do
       table.insert(lines, { line, "ClaudeCodeToolOutput" })

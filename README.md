@@ -106,6 +106,10 @@ Defaults:
   sessions = {
     idle_timeout = 15,       -- minutes before an idle background session's process is stopped; false to never
   },
+  shell = {                  -- `!command` prompts
+    respond = true,          -- Claude responds once the command exits (false: output is just context)
+    max_output = 30000,      -- characters of output given to Claude
+  },
 }
 ```
 
@@ -122,6 +126,15 @@ doing, the model and the session cost.
 - In the transcript, `i`/`a`/`o` jump to the prompt, `<Tab>`/`<CR>` on a tool call expand its output (or an
   edit's diff), and `q` hides the chat.
 - `:q` in any of the chat's windows closes the whole sidebar; the session keeps running.
+- Typing `/` at the start of the prompt opens a menu of slash commands, skills and plugin commands (Claude
+  Code's list for the session, minus ones tied to its terminal UI), filtered fuzzily as you type. `<Tab>`
+  completes, `<Up>`/`<Down>` move. Output of built-in commands like `/context` appears in the transcript.
+  nvim-cmp and blink.cmp are paused in the prompt while you type a command, so only one menu shows.
+- `!command` runs a shell command yourself, as in the CLI's bash mode: in the session's directory, without
+  going through Claude or a permission prompt. It shows in the transcript like a tool call (`<Tab>` expands the
+  output), and the command and output are added to the conversation. When it exits Claude responds; stop it
+  with `<C-c>` and it's only kept as context. Running one while Claude is working adds it as context for
+  Claude's next step.
 - Sending `/exit`, `/quit` or `exit` ends the session, as in the CLI (same as `:Claude stop`).
 
 ### Permission modes
