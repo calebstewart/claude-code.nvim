@@ -1,11 +1,17 @@
--- Slash-command completion in the prompt, like the CLI's: typing `/` at the
--- start of the prompt opens Neovim's completion menu with the session's
--- commands and skills, filtered (fuzzily) as you type. <Tab> completes.
+-- Slash-command suggestions in the prompt, like the CLI's: typing `/` at the
+-- start of the prompt shows the session's commands and skills in a small list
+-- sitting on top of the prompt box, filtered (fuzzily) as you type.
 --
--- Other completion engines (nvim-cmp, blink.cmp) are paused while a slash
--- command is being typed so their menus don't compete with this one.
+-- It's our own float rather than Neovim's completion menu, whose position and
+-- size can't be anchored to the prompt. Other completion engines (nvim-cmp,
+-- blink.cmp) are paused while a command is typed so their menus don't compete.
 
 local api = vim.api
+
+local ns = api.nvim_create_namespace("claude-code.slash")
+
+--- Rows shown at once (the list scrolls beyond this).
+local MAX_ROWS = 8
 
 local M = {}
 
@@ -31,46 +37,35 @@ function M.query(buf)
   return before:match("^/([%w%-_:%.]*)$")
 end
 
+---@param commands claude_code.SlashCommand[]
+---@param query string
+---@return claude_code.SlashCommand[]
+local function filter(commands, query)
+  if query == "" then
+    local sorted = vim.list_extend({}, commands)
+    table.sort(sorted, function(a, b)
+      return a.name < b.name
+    end)
+    return sorted
+  end
+  return vim.fn.matchfuzzy(commands, query, {
+    text_cb = function(c)
+      return c.name .. " " .. table.concat(c.aliases or {}, " ")
+    end,
+  })
+end
+
 ---@param text string
 ---@param width integer
 local function clip(text, width)
   text = text:gsub("%s+", " ")
-  if vim.fn.strchars(text) > width then
-    return vim.fn.strcharpart(text, 0, width - 1) .. "…"
+  if width <= 0 then
+    return ""
+  end
+  if vim.fn.strdisplaywidth(text) > width then
+    return vim.fn.strcharpart(text, 0, math.max(width - 1, 0)) .. "…"
   end
   return text
-end
-
----@param commands claude_code.SlashCommand[]
----@param query string
----@return table[] complete-items
-local function items(commands, query)
-  local matches
-  if query == "" then
-    matches = vim.list_extend({}, commands)
-    table.sort(matches, function(a, b)
-      return a.name < b.name
-    end)
-  else
-    matches = vim.fn.matchfuzzy(commands, query, {
-      text_cb = function(c)
-        return c.name .. " " .. table.concat(c.aliases or {}, " ")
-      end,
-    })
-  end
-  local out = {}
-  for _, c in ipairs(matches) do
-    local hint = c.argumentHint and c.argumentHint ~= "" and (" " .. c.argumentHint) or ""
-    table.insert(out, {
-      word = "/" .. c.name,
-      abbr = "/" .. c.name .. hint,
-      menu = clip(c.description or "", 60),
-      info = c.description ~= "" and c.description or nil,
-      kind = c.builtin and "" or (c.name:find(":", 1, true) and "plugin" or "skill"),
-      dup = 1,
-    })
-  end
-  return out
 end
 
 --- Pause other completion engines while a slash command is typed.
@@ -90,15 +85,161 @@ local function quiet_other_completers(buf)
   return false
 end
 
+---@class claude_code.SlashMenu
+---@field private buf integer Prompt buffer.
+---@field private get_commands fun(): claude_code.SlashCommand[]
+---@field private items claude_code.SlashCommand[]
+---@field private index integer
+---@field private list_buf? integer
+---@field private win? integer
+---@field private accepted? string Just completed; don't reopen the list for it.
+local Menu = {}
+Menu.__index = Menu
+
+function Menu:open()
+  return self.win ~= nil and api.nvim_win_is_valid(self.win)
+end
+
+function Menu:close()
+  if self:open() then
+    api.nvim_win_close(self.win, true)
+  end
+  self.win = nil
+end
+
+--- The prompt window the list sits on.
+---@private
+function Menu:prompt_win()
+  local win = vim.fn.bufwinid(self.buf)
+  return win ~= -1 and win or nil
+end
+
+--- Recompute the list for what's typed, and show, update or close it.
+function Menu:update()
+  local query = M.query(self.buf)
+  vim.b[self.buf].completion = query == nil -- blink.cmp honours this
+  if not query or "/" .. query == self.accepted then
+    self:close()
+    return
+  end
+  self.accepted = nil
+  self.items = filter(self.get_commands(), query)
+  self.index = 1
+  if #self.items == 0 then
+    self:close()
+    return
+  end
+  self:render()
+end
+
+---@private
+function Menu:render()
+  local prompt = self:prompt_win()
+  if not prompt then
+    self:close()
+    return
+  end
+  if not (self.list_buf and api.nvim_buf_is_valid(self.list_buf)) then
+    self.list_buf = api.nvim_create_buf(false, true)
+    vim.bo[self.list_buf].bufhidden = "wipe"
+  end
+
+  local width = api.nvim_win_get_width(prompt)
+  local height = math.min(#self.items, MAX_ROWS)
+  -- Names get up to ~40% of the width; descriptions fill the rest.
+  local name_width = 0
+  for _, c in ipairs(self.items) do
+    local hint = c.argumentHint and c.argumentHint ~= "" and (" " .. c.argumentHint) or ""
+    name_width = math.max(name_width, vim.fn.strdisplaywidth("/" .. c.name .. hint))
+  end
+  name_width = math.min(name_width, math.floor(width * 0.4))
+
+  local lines, marks = {}, {}
+  for i, c in ipairs(self.items) do
+    local hint = c.argumentHint and c.argumentHint ~= "" and (" " .. c.argumentHint) or ""
+    local name = clip("/" .. c.name .. hint, name_width)
+    local pad = string.rep(" ", name_width - vim.fn.strdisplaywidth(name))
+    local desc = clip(c.description or "", width - name_width - 4)
+    lines[i] = " " .. name .. pad .. "  " .. desc
+    marks[i] = { name_end = 1 + #("/" .. c.name), hint_end = 1 + #name, desc_start = #lines[i] - #desc }
+  end
+  vim.bo[self.list_buf].modifiable = true
+  api.nvim_buf_set_lines(self.list_buf, 0, -1, false, lines)
+  vim.bo[self.list_buf].modifiable = false
+  api.nvim_buf_clear_namespace(self.list_buf, ns, 0, -1)
+  for i, m in ipairs(marks) do
+    api.nvim_buf_set_extmark(self.list_buf, ns, i - 1, 1, { end_col = math.min(m.name_end, #lines[i]), hl_group = "ClaudeCodeTitle" })
+    if m.hint_end > m.name_end then
+      api.nvim_buf_set_extmark(self.list_buf, ns, i - 1, m.name_end, { end_col = m.hint_end, hl_group = "ClaudeCodeMuted" })
+    end
+    api.nvim_buf_set_extmark(self.list_buf, ns, i - 1, m.desc_start, { end_col = #lines[i], hl_group = "ClaudeCodeMuted" })
+  end
+
+  -- Sit on the prompt's top border: bottom-left corner just above it, borders aligned.
+  local config = {
+    relative = "win",
+    win = prompt,
+    anchor = "SW",
+    row = -1,
+    col = -1,
+    width = width,
+    height = height,
+    style = "minimal",
+    border = "rounded",
+    zindex = 50,
+    focusable = false,
+    footer = { { (" %d/%d · ⇥ complete "):format(self.index, #self.items), "ClaudeCodeMuted" } },
+    footer_pos = "right",
+  }
+  if self:open() then
+    api.nvim_win_set_config(self.win, config)
+  else
+    self.win = api.nvim_open_win(self.list_buf, false, config)
+    vim.wo[self.win].winhighlight =
+      "NormalFloat:ClaudeCodePicker,FloatBorder:ClaudeCodePickerBorder,FloatFooter:ClaudeCodeMuted,CursorLine:ClaudeCodePickerSelection"
+    vim.wo[self.win].cursorline = true
+    vim.wo[self.win].wrap = false
+  end
+  api.nvim_win_set_cursor(self.win, { self.index, 0 })
+end
+
+--- Re-anchor after the prompt moved or resized.
+function Menu:refresh()
+  if self:open() then
+    self:render()
+  end
+end
+
+---@param delta integer
+function Menu:move(delta)
+  if not self:open() or #self.items == 0 then
+    return
+  end
+  self.index = (self.index - 1 + delta) % #self.items + 1
+  self:render()
+end
+
+--- Replace the typed `/word` with the selected command.
+---@param trailing string Text after it (" " to go on to arguments).
+function Menu:accept(trailing)
+  local c = self.items[self.index]
+  if not c then
+    return
+  end
+  local col = api.nvim_win_get_cursor(0)[2]
+  local text = "/" .. c.name .. trailing
+  self.accepted = "/" .. c.name
+  api.nvim_buf_set_text(self.buf, 0, 0, 0, col, { text })
+  api.nvim_win_set_cursor(0, { 1, #text })
+  self:close()
+end
+
 ---@param buf integer Prompt buffer.
 ---@param get_commands fun(): claude_code.SlashCommand[]
+---@return claude_code.SlashMenu
 function M.attach(buf, get_commands)
-  -- menuone: show for a single match; noinsert: highlight the first without inserting it.
-  pcall(function()
-    vim.bo[buf].completeopt = "menuone,noinsert,popup"
-  end)
+  local self = setmetatable({ buf = buf, get_commands = get_commands, items = {}, index = 1 }, Menu)
 
-  local active = false
   local cmp_quieted = false
   local group = api.nvim_create_augroup("claude-code.slash." .. buf, { clear = true })
   api.nvim_create_autocmd("InsertEnter", {
@@ -113,63 +254,48 @@ function M.attach(buf, get_commands)
       end
     end,
   })
-  api.nvim_create_autocmd({ "TextChangedI", "TextChangedP" }, {
+  api.nvim_create_autocmd({ "TextChangedI", "CursorMovedI" }, {
     group = group,
     buffer = buf,
-    callback = function()
-      local query = M.query(buf)
-      vim.b[buf].completion = query == nil -- blink.cmp honours this
-      if not query then
-        if active and vim.fn.pumvisible() == 1 then
-          vim.fn.complete(vim.fn.col("."), {})
-        end
-        active = false
+    callback = function(ev)
+      -- Moving the cursor only matters if it leaves the command.
+      if ev.event == "CursorMovedI" and (not self:open() or M.query(buf)) then
         return
       end
-      if active and vim.fn.pumvisible() == 1 then
-        -- Moving through the menu inserts the highlighted item; that's not new
-        -- input to filter on.
-        local info = vim.fn.complete_info({ "selected", "items" })
-        local selected = info.selected >= 0 and info.items[info.selected + 1]
-        if selected and selected.word == "/" .. query then
-          return
-        end
-      end
-      local list = items(get_commands(), query)
-      active = #list > 0
-      -- Replace the whole `/word` (it starts in column 1).
-      vim.fn.complete(1, list)
+      self:update()
     end,
   })
-  api.nvim_create_autocmd("InsertLeave", {
+  api.nvim_create_autocmd({ "InsertLeave", "BufLeave" }, {
     group = group,
     buffer = buf,
     callback = function()
-      active = false
+      self:close()
     end,
   })
 
-  --- Is our menu the one showing?
-  local function ours()
-    return active and vim.fn.pumvisible() == 1
-  end
-  local function expr(lhs, when_ours)
+  -- While the list is open these act on it; otherwise they do what they normally do.
+  local function map(lhs, fn)
     vim.keymap.set("i", lhs, function()
-      if ours() then
-        return when_ours
+      if self:open() then
+        fn()
+      else
+        api.nvim_feedkeys(api.nvim_replace_termcodes(lhs, true, false, true), "n", false)
       end
-      return api.nvim_replace_termcodes(lhs, true, false, true)
-    end, { buffer = buf, expr = true, replace_keycodes = false, desc = "Claude: slash command completion" })
+    end, { buffer = buf, desc = "Claude: slash command suggestions" })
   end
-  local ctrl_y = api.nvim_replace_termcodes("<C-y>", true, false, true)
-  -- Complete the highlighted command, ready for its arguments.
-  expr("<Tab>", ctrl_y .. " ")
-  expr("<CR>", ctrl_y)
-
-  return {
-    --- For the prompt's own arrow-key handling (history): is our menu open?
-    menu_open = ours,
-  }
+  map("<Tab>", function()
+    self:accept(" ")
+  end)
+  map("<CR>", function()
+    self:accept("")
+  end)
+  map("<C-n>", function()
+    self:move(1)
+  end)
+  map("<C-p>", function()
+    self:move(-1)
+  end)
+  return self
 end
 
 return M

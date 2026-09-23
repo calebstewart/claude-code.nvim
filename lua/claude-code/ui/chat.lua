@@ -43,7 +43,7 @@ local welcome = require("claude-code.ui.welcome")
 ---@field private frame integer
 ---@field private title? string
 ---@field private augroup integer
----@field private slash { menu_open: fun(): boolean }
+---@field private slash claude_code.SlashMenu
 local Chat = {}
 Chat.__index = Chat
 
@@ -250,6 +250,7 @@ function Chat:layout()
     width = math.max(api.nvim_win_get_width(wins.dock) - 2, 1),
     height = math.min(height, math.max(api.nvim_win_get_height(wins.dock) - 2, 1)),
   })
+  self.slash:refresh()
   self:render_status()
 end
 
@@ -269,6 +270,7 @@ function Chat:focus_prompt(insert)
 end
 
 function Chat:hide()
+  self.slash:close()
   local wins = self:windows()
   -- Closing the window you're typing in shouldn't leave you in insert mode elsewhere.
   local cur = api.nvim_get_current_win()
@@ -332,10 +334,10 @@ function Chat:apply_keymaps()
   end
   -- Up/Down move through the slash-command menu when it's open; otherwise they
   -- recall earlier prompts when the cursor is on the first/last line.
-  for _, dir in ipairs({ { "<Up>", -1, "<C-p>" }, { "<Down>", 1, "<C-n>" } }) do
+  for _, dir in ipairs({ { "<Up>", -1 }, { "<Down>", 1 } }) do
     map(self.prompt.buf, { "n", "i" }, dir[1], function()
-      if self.slash.menu_open() then
-        api.nvim_feedkeys(api.nvim_replace_termcodes(dir[3], true, false, true), "n", false)
+      if self.slash:open() then
+        self.slash:move(dir[2])
       elseif not self.prompt:recall(dir[2]) then
         api.nvim_feedkeys(api.nvim_replace_termcodes(dir[1], true, false, true), "n", false)
       end
