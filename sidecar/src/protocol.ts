@@ -28,6 +28,12 @@ export interface InterruptRequest {
   type: "interrupt";
 }
 
+/** Switch the running session's permission mode. */
+export interface SetPermissionModeRequest {
+  type: "set_permission_mode";
+  mode: PermissionMode;
+}
+
 export interface PermissionResponse {
   type: "permission_response";
   id: number;
@@ -36,10 +42,12 @@ export interface PermissionResponse {
   always?: boolean;
   /** Replacement tool input, e.g. AskUserQuestion's input with `answers` filled in. */
   updated_input?: Record<string, unknown>;
+  /** Also switch the session's permission mode (e.g. approving a plan into acceptEdits). */
+  set_mode?: PermissionMode;
   message?: string;
 }
 
-export type Inbound = InitRequest | PromptRequest | InterruptRequest | PermissionResponse;
+export type Inbound = InitRequest | PromptRequest | InterruptRequest | SetPermissionModeRequest | PermissionResponse;
 
 // Sidecar -> Neovim
 

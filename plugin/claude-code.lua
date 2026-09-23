@@ -28,6 +28,9 @@ local subcommands = {
   rename = function(args)
     require("claude-code").rename(args)
   end,
+  mode = function(args)
+    require("claude-code").mode(args)
+  end,
   next = function()
     require("claude-code").next()
   end,
@@ -51,6 +54,11 @@ end, {
   nargs = "*",
   desc = "Claude Code",
   complete = function(arg_lead, line)
+    if line:match("^%S+%s+mode%s+%S*$") then
+      return vim.tbl_filter(function(mode)
+        return vim.startswith(mode, arg_lead)
+      end, require("claude-code.modes").all)
+    end
     if line:match("^%S+%s+%S+%s") then
       return {}
     end

@@ -6,7 +6,7 @@ local M = {}
 ---@field node string Node executable used to run the sidecar.
 ---@field claude? string Claude Code executable. Defaults to `claude` on $PATH.
 ---@field model? string Model alias or id; nil uses Claude Code's default.
----@field permission_mode claude_code.PermissionMode
+---@field permission_mode? claude_code.PermissionMode Starting mode; nil uses Claude Code's settings (`defaultMode`).
 ---@field window claude_code.WindowConfig
 ---@field keymaps claude_code.KeymapConfig
 ---@field icons "nerd"|"unicode" Glyph set; "nerd" needs a Nerd Font.
@@ -26,13 +26,14 @@ local M = {}
 ---@field interrupt string|false Interrupt the turn in progress (normal mode, both windows).
 ---@field close string|false Hide the chat (normal mode, transcript window).
 ---@field toggle_tool string[]|false Expand/collapse the tool call under the cursor (normal mode, transcript window).
+---@field cycle_mode string|false Cycle the permission mode: default -> accept edits -> plan (prompt, both modes).
 
 ---@type claude_code.Config
 M.defaults = {
   node = "node",
   claude = nil,
   model = nil,
-  permission_mode = "default",
+  permission_mode = nil,
   window = {
     position = "right",
     size = 0.4,
@@ -45,6 +46,7 @@ M.defaults = {
     interrupt = "<C-c>",
     close = "q",
     toggle_tool = { "<Tab>", "<CR>" },
+    cycle_mode = "<S-Tab>",
   },
   icons = "nerd",
   markdown = { enabled = true },

@@ -20,6 +20,7 @@ local welcome = require("claude-code.ui.welcome")
 ---@field model? string
 ---@field cost? number Session cost in USD.
 ---@field stopped? "suspended"|"ended"|false Not running: suspended while idle, or exited.
+---@field mode? string Permission mode.
 
 ---@class claude_code.ChatOpts
 ---@field id integer
@@ -28,6 +29,7 @@ local welcome = require("claude-code.ui.welcome")
 ---@field session_id? fun(): string? Claude session id, recorded with history entries.
 ---@field title? string
 ---@field on_show? fun() Called after the chat is shown (e.g. to present deferred cards).
+---@field on_cycle_mode? fun() The cycle-mode key was pressed.
 
 ---@class claude_code.Chat
 ---@field transcript claude_code.Transcript
@@ -339,11 +341,21 @@ function Chat:apply_keymaps()
       self:focus_prompt(true)
     end, "focus prompt")
   end
+  if keys.cycle_mode and self.opts.on_cycle_mode then
+    map(self.prompt.buf, { "n", "i" }, keys.cycle_mode, self.opts.on_cycle_mode, "cycle permission mode")
+    map(self.transcript.buf, "n", keys.cycle_mode, self.opts.on_cycle_mode, "cycle permission mode")
+  end
   for _, lhs in ipairs(keys.toggle_tool or {}) do
     map(self.transcript.buf, "n", lhs, function()
       self.transcript:toggle_tool_at(api.nvim_win_get_cursor(0)[1] - 1)
     end, "expand/collapse tool output")
   end
+end
+
+--- The activity currently shown (so callers can update other fields without clearing it).
+---@return string?
+function Chat:activity()
+  return self.status.activity
 end
 
 ---@param status claude_code.ChatStatus Fields to update; `activity` is always replaced.
@@ -433,9 +445,34 @@ function Chat:render_status()
   if keys.interrupt and s.activity then
     table.insert(hints, icons.key(keys.interrupt) .. " interrupt")
   end
-  local footer = { { " " .. table.concat(hints, " · ") .. " ", "ClaudeCodeMuted" } }
+  -- Bottom edge: permission mode on the left (as the CLI shows it under its
+  -- input), key hints on the right.
+  local right_hints = { { " " .. table.concat(hints, " · ") .. " ", "ClaudeCodeMuted" } }
+  local mode_chunks = {}
+  if s.mode and s.mode ~= "default" then
+    local label, mode_hl = require("claude-code.modes").display(s.mode)
+    local cycle = keys.cycle_mode and (" (" .. icons.key(keys.cycle_mode) .. ")") or ""
+    mode_chunks = { { " " .. label, mode_hl }, { cycle .. " ", "ClaudeCodeMuted" } }
+  end
+  local footer
+  local footer_gap = width - 1 - width_of(mode_chunks) - width_of(right_hints) - 1
+  if #mode_chunks > 0 and footer_gap >= 1 then
+    footer = { { "─", border_hl } }
+    vim.list_extend(footer, mode_chunks)
+    table.insert(footer, { string.rep("─", footer_gap), border_hl })
+    vim.list_extend(footer, right_hints)
+  elseif #mode_chunks > 0 then
+    footer = mode_chunks
+  else
+    footer = right_hints
+  end
 
-  api.nvim_win_set_config(win, { title = title, title_pos = "left", footer = footer, footer_pos = "right" })
+  api.nvim_win_set_config(win, {
+    title = title,
+    title_pos = "left",
+    footer = footer,
+    footer_pos = #mode_chunks > 0 and "left" or "right",
+  })
   vim.wo[win].winhighlight = "NormalFloat:ClaudeCodePrompt,FloatBorder:" .. border_hl
 end
 

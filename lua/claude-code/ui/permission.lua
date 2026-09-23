@@ -28,6 +28,7 @@ local ns = api.nvim_create_namespace("claude-code.permission")
 ---@field always? boolean Also apply the SDK's suggested rules.
 ---@field updated_input? table Replacement tool input.
 ---@field message? string Reason given to Claude on deny.
+---@field set_mode? claude_code.PermissionMode Also switch the session's permission mode.
 
 ---@class claude_code.Permissions
 ---@field private chat claude_code.Chat
@@ -248,6 +249,41 @@ local function permission_card(request, width)
   return frame(width, icons.get().permission .. " Permission", rows)
 end
 
+--- Claude finished planning and asks to leave plan mode.
+---@param request claude_code.PermissionRequest
+local function is_plan(request)
+  return request.tool_name == "ExitPlanMode"
+end
+
+---@param request claude_code.PermissionRequest
+---@param width integer
+---@return claude_code.VirtLine[]
+local function plan_card(request, width)
+  local input = request.input or {}
+  local rows = {} ---@type claude_code.Chunk[][]
+  local lines = vim.split(vim.trim(input.plan or ""), "\n", { plain = true })
+  local max = 12
+  for i, line in ipairs(lines) do
+    if i > max then
+      table.insert(rows, { { ("… %d more lines · o opens the full plan"):format(#lines - max), "ClaudeCodeMuted" } })
+      break
+    end
+    table.insert(rows, { { line, "ClaudeCodeCardText" } })
+  end
+  if input.planFilePath then
+    table.insert(rows, {})
+    table.insert(rows, { { vim.fn.fnamemodify(input.planFilePath, ":~"), "ClaudeCodeMuted" } })
+  end
+  table.insert(rows, {})
+  if input.planFilePath then
+    table.insert(rows, choice("o", "open the plan for review"))
+  end
+  table.insert(rows, choice("a", "approve · auto-accept edits"))
+  table.insert(rows, choice("y", "approve · review each edit"))
+  table.insert(rows, choice("n", "keep planning", "ClaudeCodeCardDenyKey"))
+  return frame(width, icons.get().plan .. " Plan ready for review", rows)
+end
+
 -- Flow -----------------------------------------------------------------------
 
 ---@param request claude_code.PermissionRequest
@@ -283,6 +319,10 @@ function Permissions:present()
       end,
     })
     self.picker:open()
+  elseif is_plan(request) then
+    self.chat:set_status({ activity = "Waiting for plan approval", attention = "Plan ready: o open · a/y approve · n keep planning" })
+    self:render()
+    self.chat:focus_prompt(false)
   else
     self.chat:set_status({ activity = "Waiting for permission", attention = "Permission required: y allow · n deny" })
     self:render()
@@ -300,11 +340,15 @@ function Permissions:render()
   local width = win and api.nvim_win_get_width(win) or 80
   self.card = api.nvim_buf_set_extmark(transcript.buf, ns, row, 0, {
     id = self.card,
-    virt_lines = permission_card(request, width),
+    virt_lines = is_plan(request) and plan_card(request, width) or permission_card(request, width),
   })
   transcript:follow()
   self:unmap_keys()
-  self:map_permission_keys(request)
+  if is_plan(request) then
+    self:map_plan_keys(request)
+  else
+    self:map_permission_keys(request)
+  end
 end
 
 ---@private
@@ -339,6 +383,51 @@ function Permissions:map_permission_keys(request)
   if offers_always(request) and not request.default_to_no then
     keys.a = function()
       self:answer({ behavior = "allow", always = true })
+    end
+  end
+  self:map(keys)
+end
+
+---@private
+---@param request claude_code.PermissionRequest
+function Permissions:map_plan_keys(request)
+  local path = request.input.planFilePath
+  local plan = require("claude-code.ui.plan")
+  local function approve(mode)
+    local answer = { behavior = "allow", set_mode = mode } ---@type claude_code.PermissionAnswer
+    -- Hand Claude the plan as reviewed: edits in the review window (saved first) count.
+    local text = path and plan.read(path)
+    if text and vim.trim(text) ~= vim.trim(request.input.plan or "") then
+      answer.updated_input = { plan = text, planFilePath = path }
+    end
+    self:answer(answer)
+  end
+  local keys = {
+    a = function()
+      approve("acceptEdits")
+    end,
+    y = function()
+      approve("default")
+    end,
+    n = function()
+      require("claude-code.ui.input").open({
+        title = "What should change? (optional)",
+        on_submit = function(feedback)
+          self:answer({
+            behavior = "deny",
+            message = feedback ~= "" and ("The user wants to keep planning. Their feedback: " .. feedback)
+              or "The user wants to keep planning. Ask what they would like changed.",
+          })
+        end,
+        on_cancel = function()
+          self.chat:focus_prompt(false)
+        end,
+      })
+    end,
+  }
+  if path then
+    keys.o = function()
+      plan.open(path, self.chat)
     end
   end
   self:map(keys)

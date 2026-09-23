@@ -97,6 +97,31 @@ function M.rename(name)
   })
 end
 
+--- Set the current session's permission mode. With no mode, pick one.
+---@param mode? string
+function M.mode(mode)
+  local s = sessions.current()
+  if not s then
+    vim.notify("claude-code: no current session", vim.log.levels.WARN)
+    return
+  end
+  if mode and mode ~= "" then
+    s:set_mode(mode)
+    return
+  end
+  local modes = require("claude-code.modes")
+  vim.ui.select(modes.all, {
+    prompt = ("Permission mode (now: %s)"):format(s.mode or "default"),
+    format_item = function(m)
+      return (modes.display(m))
+    end,
+  }, function(choice)
+    if choice then
+      s:set_mode(choice)
+    end
+  end)
+end
+
 --- Switch to the next/previous session open in this Neovim.
 function M.next()
   sessions.cycle(1)

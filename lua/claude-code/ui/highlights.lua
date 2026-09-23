@@ -89,6 +89,11 @@ local function apply()
     ClaudeCodePlaceholder = { fg = muted, italic = true },
     ClaudeCodeBar = { link = "Normal" },
     ClaudeCodeWelcomeLogo = { fg = claude, bold = true },
+    -- Permission modes (shown in the prompt border)
+    ClaudeCodeModeAcceptEdits = { fg = accent("Constant", 0xc678dd), bold = true },
+    ClaudeCodeModePlan = { fg = accent("Type", 0x56b6c2), bold = true },
+    ClaudeCodeModeBypass = { fg = err, bold = true },
+    ClaudeCodeModeOther = { fg = warn, bold = true },
     -- Question picker
     ClaudeCodePicker = { link = "NormalFloat" },
     ClaudeCodePickerBorder = { fg = blend(claude, bg, 0.6) },

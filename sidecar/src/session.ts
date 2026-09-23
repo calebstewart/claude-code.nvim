@@ -100,6 +100,8 @@ async function run(init: InitRequest): Promise<void> {
       pathToClaudeCodeExecutable: init.claude_path,
       model: init.model,
       permissionMode: init.permission_mode,
+      // The SDK refuses bypassPermissions without this; only set it when that mode was chosen.
+      allowDangerouslySkipPermissions: init.permission_mode === "bypassPermissions" || undefined,
       resume: init.resume,
       sessionId: init.resume ? undefined : sessionId,
       title: init.resume ? undefined : init.title,
@@ -136,6 +138,11 @@ function handle(request: Inbound): void {
     case "prompt":
       inbox.push(request.text);
       return;
+    case "set_permission_mode":
+      session?.setPermissionMode(request.mode).catch((err: unknown) => {
+        send({ type: "error", message: `Couldn't switch to ${request.mode}: ${String(err)}` });
+      });
+      return;
     case "interrupt":
       session?.interrupt().catch((err: unknown) => {
         send({ type: "error", message: `Interrupt failed: ${String(err)}` });
@@ -148,10 +155,14 @@ function handle(request: Inbound): void {
       if (request.behavior === "deny") {
         pending.resolve({ behavior: "deny", message: request.message ?? "The user denied this tool use." });
       } else {
+        const updates: PermissionUpdate[] = request.always ? [...(pending.suggestions ?? [])] : [];
+        if (request.set_mode) {
+          updates.push({ type: "setMode", mode: request.set_mode, destination: "session" });
+        }
         pending.resolve({
           behavior: "allow",
           updatedInput: request.updated_input,
-          updatedPermissions: request.always ? pending.suggestions : undefined,
+          updatedPermissions: updates.length > 0 ? updates : undefined,
         });
       }
       return;

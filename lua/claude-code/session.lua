@@ -8,6 +8,7 @@ local Permissions = require("claude-code.ui.permission")
 local Sidecar = require("claude-code.sidecar")
 local config = require("claude-code.config")
 local control = require("claude-code.control")
+local modes = require("claude-code.modes")
 local tools = require("claude-code.ui.tools")
 
 ---@class claude_code.Session
@@ -17,6 +18,8 @@ local tools = require("claude-code.ui.tools")
 ---@field chat claude_code.Chat
 ---@field busy boolean A turn is in progress.
 ---@field last_active integer os.time() of the last activity.
+---@field mode? claude_code.PermissionMode Current permission mode (nil until Claude Code reports it).
+---@field private started_mode? claude_code.PermissionMode Mode the process was started in.
 ---@field private persisted boolean Its transcript exists on disk (so it can be resumed).
 ---@field private sidecar? claude_code.Sidecar
 ---@field private permissions claude_code.Permissions
@@ -66,6 +69,7 @@ function Session.new(opts)
     persisted = info ~= nil,
     busy = false,
     last_active = info and math.floor((info.lastModified or 0) / 1000) or os.time(),
+    mode = config.options.permission_mode,
     suspending = false,
     in_reply = false,
     reply_has_text = false,
@@ -87,6 +91,9 @@ function Session.new(opts)
     on_show = function()
       self.permissions:on_show()
     end,
+    on_cycle_mode = function()
+      self:set_mode(modes.next(self.mode))
+    end,
   })
   self.permissions = Permissions.new(self.chat, function(id, answer)
     if self.sidecar then
@@ -96,6 +103,7 @@ function Session.new(opts)
         behavior = answer.behavior,
         always = answer.always,
         updated_input = answer.updated_input,
+        set_mode = answer.set_mode,
         message = answer.message,
       })
     end
@@ -146,13 +154,15 @@ function Session:start()
     end,
   })
   self.sidecar = sidecar
-  self.chat:set_status({ activity = self.busy and "Thinking" or "Starting", stopped = false })
+  self.started_mode = self.mode
+  self.chat:set_status({ activity = self.busy and "Thinking" or "Starting", stopped = false, mode = self.mode })
   sidecar:start({
     type = "init",
     cwd = self.cwd,
     claude_path = config.claude_path() --[[@as string]],
     model = config.options.model,
-    permission_mode = config.options.permission_mode,
+    -- Keeps the session's current mode across suspend/resume.
+    permission_mode = self.mode,
     resume = self.persisted and self.id or nil,
     session_id = not self.persisted and self.id or nil,
     title = not self.persisted and self.title or nil,
@@ -222,6 +232,28 @@ function Session:interrupt()
   end
 end
 
+--- Switch permission mode (takes effect immediately if running, else on start).
+---@param mode claude_code.PermissionMode
+function Session:set_mode(mode)
+  if not modes.valid(mode) then
+    vim.notify("claude-code: unknown permission mode: " .. tostring(mode), vim.log.levels.ERROR)
+    return
+  end
+  if mode == "bypassPermissions" and self:running() and self.started_mode ~= "bypassPermissions" then
+    -- The SDK only allows it for sessions started in it (a deliberate safety check).
+    vim.notify(
+      "claude-code: bypassPermissions has to be the starting mode; set `permission_mode` in setup()",
+      vim.log.levels.ERROR
+    )
+    return
+  end
+  self.mode = mode
+  self.chat:set_status({ activity = self.chat:activity(), mode = mode })
+  if self:running() then
+    self.sidecar:send({ type = "set_permission_mode", mode = mode })
+  end
+end
+
 ---@param title string
 function Session:rename(title)
   self.title = title
@@ -283,6 +315,11 @@ function Session:on_sdk_message(msg)
   end
   local transcript = self.chat.transcript
 
+  if msg.type == "system" and (msg.subtype == "init" or msg.subtype == "status") and msg.permissionMode then
+    -- Claude Code reports the mode each turn, and when it changes (e.g. leaving plan mode).
+    self.mode = msg.permissionMode
+    self.chat:set_status({ activity = self.chat:activity(), mode = self.mode })
+  end
   if msg.type == "system" and msg.subtype == "init" then
     self.chat:set_status({ activity = self.busy and "Thinking" or nil, model = msg.model })
   elseif msg.type == "stream_event" then

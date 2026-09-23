@@ -50,7 +50,8 @@ Defaults:
   node = "node",             -- Node executable used to run the sidecar
   claude = nil,              -- Claude Code executable; defaults to `claude` on $PATH
   model = nil,               -- e.g. "opus", "sonnet"; nil uses Claude Code's default
-  permission_mode = "default", -- "default" | "acceptEdits" | "plan" | "dontAsk" | "auto" | "bypassPermissions"
+  permission_mode = nil,     -- starting mode: "default" | "acceptEdits" | "plan" | "dontAsk" | "auto" | "bypassPermissions";
+                             -- nil uses Claude Code's settings (`defaultMode`)
   window = {
     position = "right",      -- "right" | "left" | "top" | "bottom"
     size = 0.4,              -- columns/rows, or a fraction of the editor when < 1
@@ -61,6 +62,7 @@ Defaults:
     interrupt = "<C-c>",     -- normal mode, transcript and prompt
     close = "q",             -- normal mode, transcript
     toggle_tool = { "<Tab>", "<CR>" }, -- normal mode, transcript: expand/collapse tool output
+    cycle_mode = "<S-Tab>",  -- prompt and transcript: cycle default → accept edits → plan
   },
   icons = "nerd",            -- "nerd" (needs a Nerd Font) | "unicode"
   markdown = { enabled = true }, -- shaded code blocks, bullets, rules, quote bars; disable if you use render-markdown.nvim
@@ -87,6 +89,16 @@ doing, the model and the session cost.
 - `:q` in any of the chat's windows closes the whole sidebar; the session keeps running.
 - Sending `/exit`, `/quit` or `exit` ends the session, as in the CLI (same as `:Claude stop`).
 
+### Permission modes
+
+The prompt's bottom border shows the current mode when it isn't the default (`⏵⏵ accept edits`,
+`⏸ plan mode`, …). `<S-Tab>` cycles default → accept edits → plan, like the CLI's shift+tab, and
+`:Claude mode [mode]` sets any mode (or pick one from a list). Modes changed by Claude Code itself, such as
+leaving plan mode, are reflected too, and a session keeps its mode when it's suspended and resumed.
+
+`bypassPermissions` can only be a session's starting mode (the SDK requires it to be chosen up front), so set
+it with `permission_mode` in `setup()`.
+
 ### When Claude needs you
 
 - **Permission requests** appear as a card under the tool call: `y` allow, `a` always allow (applies Claude Code's
@@ -95,6 +107,10 @@ doing, the model and the session cost.
   option's description and preview on the right, and a notes box below. Press a number or `<CR>` to choose
   (for multi-select: numbers or `<Tab>` toggle, `<CR>` confirms), `n` to attach a note to your answer, `o` to
   answer in your own words, and `c` to "chat about this" instead. `<Esc>` declines the questions.
+- **Plans** (leaving plan mode) appear as a card with the plan: `o` opens the plan's markdown file in a window
+  beside the chat for review, `a` approves and switches to accept edits, `y` approves and keeps reviewing each
+  edit, `n` keeps planning (optionally with feedback). Edits you make to the plan, saved or not, are what
+  Claude gets on approval.
 
 If this happens in a session you're not looking at, you get a notification, and the card or dialog appears when
 you switch to that session.
@@ -130,6 +146,7 @@ and vice versa, names included.
 | `:Claude new [name]` | Start a new session (asks for a name if none is given; leave it empty for none) |
 | `:Claude rename [name]` | Rename the current session (asks if no name is given) |
 | `:Claude next` / `:Claude prev` | Cycle through the sessions open in this Neovim |
+| `:Claude mode [mode]` | Set the current session's permission mode (pick from a list if none is given) |
 | `:Claude stop` | End the current session and close it (resume it later from the picker) |
 
 The same actions are available from Lua: `require("claude-code").sessions()`, `.new(name)`, `.rename(name)`,

@@ -16,6 +16,7 @@ local config = require("claude-code.config")
 ---@field question string
 ---@field spinner string[]
 ---@field pill [string, string] Left and right caps for header pills.
+---@field plan string
 ---@field tools table<string, string> Tool name -> icon; `default` for anything else.
 
 ---@type table<string, claude_code.Icons>
@@ -33,6 +34,7 @@ local sets = {
     cancelled = "\u{f05e}", -- fa-ban
     permission = "\u{f132}", -- fa-shield
     question = "\u{f128}", -- fa-question
+    plan = "\u{f022}", -- fa-list_alt
     pill = { "\u{e0b6}", "\u{e0b4}" }, -- powerline rounded caps
     spinner = { "⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏" },
     tools = {
@@ -50,6 +52,7 @@ local sets = {
       Agent = "\u{f070e}",
       TodoWrite = "\u{f45e}", -- oct-checklist
       AskUserQuestion = "\u{f128}", -- fa-question
+      ExitPlanMode = "\u{f022}", -- fa-list_alt
       default = "\u{f423}", -- oct-gear
     },
   },
@@ -65,6 +68,7 @@ local sets = {
     cancelled = "○",
     permission = "!",
     question = "?",
+    plan = "☰",
     pill = { "", "" },
     spinner = { "⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏" },
     tools = {
@@ -82,6 +86,7 @@ local sets = {
       Agent = "◈",
       TodoWrite = "☐",
       AskUserQuestion = "?",
+      ExitPlanMode = "☰",
       default = "•",
     },
   },
@@ -98,7 +103,7 @@ end
 ---@param lhs string
 ---@return string
 function M.key(lhs)
-  local named = { ["<cr>"] = "⏎", ["<c-cr>"] = "^⏎", ["<tab>"] = "⇥", ["<esc>"] = "esc" }
+  local named = { ["<cr>"] = "⏎", ["<c-cr>"] = "^⏎", ["<tab>"] = "⇥", ["<s-tab>"] = "⇧⇥", ["<esc>"] = "esc" }
   if named[lhs:lower()] then
     return named[lhs:lower()]
   end
