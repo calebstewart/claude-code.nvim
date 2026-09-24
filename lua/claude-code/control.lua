@@ -51,7 +51,14 @@ end
 local function locally(method, params)
   local store = require("claude-agent-sdk.sessions")
   if method == "list_sessions" then
-    return store.list_sessions({ dir = params.dir, limit = params.limit, offset = params.offset })
+    return store.list_sessions({
+      dir = params.dir,
+      limit = params.limit,
+      offset = params.offset,
+      include_worktrees = params.include_worktrees,
+    })
+  elseif method == "list_projects" then
+    return store.list_projects()
   elseif method == "get_session_info" then
     return store.get_session_info(params.session_id, { dir = params.dir })
   elseif method == "get_messages" then
@@ -76,7 +83,7 @@ end
 
 --- Call a control method. `callback` runs on the main loop, as it does for the
 --- sidecar, so callers can treat both paths identically.
----@param method "list_sessions"|"get_messages"|"get_session_info"|"rename_session"|"delete_session"
+---@param method "list_sessions"|"list_projects"|"get_messages"|"get_session_info"|"rename_session"|"delete_session"
 ---@param params table
 ---@param callback fun(err?: string, result?: any)
 function M.request(method, params, callback)

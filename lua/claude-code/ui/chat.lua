@@ -14,6 +14,7 @@ local Prompt = require("claude-code.ui.prompt")
 local Transcript = require("claude-code.ui.transcript")
 local welcome = require("claude-code.ui.welcome")
 local images = require("claude-code.images")
+local events = require("claude-code.events")
 
 --- Prompt buffer -> chat, for pastes of image paths (see install_paste_hook).
 ---@type table<integer, claude_code.Chat>
@@ -66,6 +67,7 @@ end
 ---@field on_interrupt fun()
 ---@field session_id? fun(): string? Claude session id, recorded with history entries.
 ---@field title? string
+---@field cwd? string The session's working directory, shown in the winbar.
 ---@field on_show? fun() Called after the chat is shown (e.g. to present deferred cards).
 ---@field on_cycle_mode? fun() The cycle-mode key was pressed.
 ---@field commands? fun(): claude_code.SlashCommand[] Slash commands for completion.
@@ -227,6 +229,7 @@ end
 ---@param title? string
 function Chat:set_title(title)
   self.title = title
+  events.sessions_changed()
   local win = self:windows().transcript
   if win then
     vim.wo[win][0].winbar = self:winbar()
@@ -241,7 +244,7 @@ function Chat:winbar()
   return ("%%#ClaudeCodeTitle# %s %s %%#ClaudeCodeMuted#%s"):format(
     icons.get().claude,
     escape(self.title or "New session"),
-    escape(vim.fn.fnamemodify(vim.fn.getcwd(), ":~"))
+    escape(vim.fn.fnamemodify(self.opts.cwd or vim.fn.getcwd(), ":~"))
   )
 end
 
@@ -560,6 +563,7 @@ function Chat:set_status(status)
   local activity = status.activity
   self.status = vim.tbl_extend("force", self.status, status)
   self.status.activity = activity
+  events.sessions_changed()
   if activity and not self.timer then
     self.timer = assert(vim.uv.new_timer())
     self.timer:start(

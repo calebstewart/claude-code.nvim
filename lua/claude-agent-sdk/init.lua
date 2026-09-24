@@ -169,6 +169,11 @@ function M.rename_session(session_id, title, opts)
   return require("claude-agent-sdk.sessions").rename_session(session_id, title, opts)
 end
 
+---@return { cwd: string, sessions: integer, lastModified: integer }[]
+function M.list_projects()
+  return require("claude-agent-sdk.sessions").list_projects()
+end
+
 ---@param session_id string
 ---@param opts? { dir?: string }
 ---@return boolean ok, string? err

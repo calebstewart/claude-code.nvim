@@ -61,6 +61,7 @@ end
 ---@class claude_code.SessionOpts
 ---@field title? string Name for a new session.
 ---@field info? table SDKSessionInfo of a stored session to resume.
+---@field cwd? string Directory for a new session to run in (default: Neovim's cwd).
 
 ---@param opts? claude_code.SessionOpts
 ---@return claude_code.Session?
@@ -76,11 +77,11 @@ function Session.new(opts)
   local self = setmetatable({
     id = info and info.sessionId or uuid(),
     title = info and (info.customTitle or info.summary) or opts.title,
-    cwd = info and info.cwd or vim.fn.getcwd(),
+    cwd = info and info.cwd or opts.cwd or vim.fn.getcwd(),
     persisted = info ~= nil,
     busy = false,
     last_active = info and math.floor((info.lastModified or 0) / 1000) or os.time(),
-    mode = config.options.permission_mode or modes.settings_default(info and info.cwd or vim.fn.getcwd()),
+    mode = config.options.permission_mode or modes.settings_default(info and info.cwd or opts.cwd or vim.fn.getcwd()),
     commands = {},
     terminal_commands = {},
     streamed = {},
@@ -99,6 +100,7 @@ function Session.new(opts)
   self.chat = Chat.new({
     id = count,
     title = self.title,
+    cwd = self.cwd,
     on_submit = function(text, attachments)
       return self:send(text, attachments)
     end,

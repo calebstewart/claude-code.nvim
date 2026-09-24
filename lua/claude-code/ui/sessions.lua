@@ -12,6 +12,7 @@
 
 local api = vim.api
 local control = require("claude-code.control")
+local listing = require("claude-code.listing")
 local icons = require("claude-code.ui.icons")
 local sessions = require("claude-code.sessions")
 
@@ -22,36 +23,13 @@ local M = {}
 --- Messages shown in the preview.
 local PREVIEW_MESSAGES = 12
 
----@class claude_code.SessionEntry
----@field id string
----@field title string
----@field last_used integer os.time()
----@field cwd? string
----@field branch? string
----@field first_prompt? string
----@field info? table SDKSessionInfo, for stored sessions
----@field live? claude_code.Session Open in this Neovim.
----@field elsewhere? integer pid of another Claude Code process that has it open
-
 ---@class claude_code.PickerState
 ---@field scope "project"|"all"
 ---@field query string
 ---@field selected_id? string
 
----@param seconds integer
-local function ago(seconds)
-  local d = os.time() - seconds
-  if d < 60 then
-    return "just now"
-  elseif d < 3600 then
-    return ("%dm ago"):format(d / 60)
-  elseif d < 86400 then
-    return ("%dh ago"):format(d / 3600)
-  elseif d < 7 * 86400 then
-    return ("%dd ago"):format(d / 86400)
-  end
-  return os.date("%b %d", seconds) --[[@as string]]
-end
+local ago = listing.ago
+local status = listing.status
 
 ---@param text string
 ---@param width integer
@@ -85,26 +63,6 @@ local function clip(text, width)
   return text
 end
 
---- Status glyph and highlight for a row.
----@param entry claude_code.SessionEntry
----@return string glyph, string hl, string label
-local function status(entry)
-  local s = entry.live
-  if s then
-    if s:needs_attention() then
-      return icons.get().permission, "ClaudeCodePromptAttention", "needs your input"
-    elseif s.busy then
-      return "●", "ClaudeCodeStatus", "working"
-    elseif s:running() then
-      return "●", "ClaudeCodeToolSuccess", "open"
-    end
-    return "○", "ClaudeCodeMuted", "open (suspended)"
-  elseif entry.elsewhere then
-    return "◆", "DiagnosticWarn", ("open in another Claude Code (pid %d)"):format(entry.elsewhere)
-  end
-  return " ", "Normal", "saved"
-end
-
 ---@class claude_code.SessionPicker
 ---@field private state claude_code.PickerState
 ---@field private entries claude_code.SessionEntry[]
@@ -120,46 +78,16 @@ end
 local Picker = {}
 Picker.__index = Picker
 
---- Stored sessions plus the ones open in this Neovim (including new sessions
---- not written to disk yet), newest first.
+--- Stored sessions plus the ones open in this Neovim (for the project scope,
+--- only those running in Neovim's cwd), newest first.
 ---@param stored table[] SDKSessionInfo[]
 ---@param scope "project"|"all"
 ---@return claude_code.SessionEntry[]
 local function merge(stored, scope)
-  local elsewhere = sessions.open_elsewhere()
-  local by_id = {}
-  local entries = {}
-  for _, info in ipairs(stored) do
-    local entry = {
-      id = info.sessionId,
-      title = info.customTitle or info.summary or "Untitled",
-      last_used = math.floor((info.lastModified or 0) / 1000),
-      cwd = info.cwd,
-      branch = info.gitBranch,
-      first_prompt = info.firstPrompt,
-      info = info,
-      elsewhere = elsewhere[info.sessionId],
-    }
-    by_id[entry.id] = entry
-    table.insert(entries, entry)
-  end
   local cwd = vim.fn.getcwd()
-  for _, s in ipairs(sessions.live()) do
-    local entry = by_id[s.id]
-    if not entry and (scope == "all" or s.cwd == cwd) then
-      entry = { id = s.id, title = s.title or "New session", last_used = s.last_active, cwd = s.cwd }
-      table.insert(entries, entry)
-    end
-    if entry then
-      entry.live = s
-      entry.title = s.title or entry.title
-      entry.last_used = math.max(entry.last_used, s.last_active)
-    end
-  end
-  table.sort(entries, function(a, b)
-    return a.last_used > b.last_used
+  return listing.merge(stored, function(s)
+    return scope == "all" or s.cwd == cwd
   end)
-  return entries
 end
 
 ---@param state? claude_code.PickerState
@@ -550,38 +478,16 @@ function Picker:move(delta)
   self:render()
 end
 
---- Run `fn` once `session`'s process has exited (it may flush one last entry
---- to the transcript on the way out), or after a few seconds regardless.
----@param session claude_code.Session
----@param fn fun()
-local function when_stopped(session, fn)
-  local deadline = vim.uv.now() + 5000
-  local function check()
-    if not session:running() or vim.uv.now() > deadline then
-      fn()
-    else
-      vim.defer_fn(check, 50)
-    end
-  end
-  check()
-end
-
---- Delete the highlighted session, after asking. A session open in this Neovim
---- is closed first; one open in another Claude Code process is left alone,
---- since that process would just write the transcript back.
+--- Delete the highlighted session, after asking.
 ---@private
 function Picker:delete_selected()
   local entry = self.shown[self.index]
   if not entry then
     return
   end
-  if entry.elsewhere then
-    vim.notify(
-      ("claude-code: this session is open in another Claude Code process (pid %d); close it there first"):format(
-        entry.elsewhere
-      ),
-      vim.log.levels.WARN
-    )
+  local blocker = listing.delete_blocker(entry)
+  if blocker then
+    vim.notify("claude-code: " .. blocker, vim.log.levels.WARN)
     return
   end
   local title = clip((entry.title:gsub("\n", " ")), 60)
@@ -590,32 +496,17 @@ function Picker:delete_selected()
   if vim.fn.confirm(question, "&Delete\n&Cancel", 2, "Warning") ~= 1 then
     return
   end
-
   -- Drop it from the list straight away; the transcript goes once it's safe.
   self.entries = vim.tbl_filter(function(e)
     return e.id ~= entry.id
   end, self.entries)
   self.state.selected_id = nil
   self:filter()
-
-  local function remove()
-    control.request("delete_session", { session_id = entry.id, dir = entry.cwd }, function(err)
-      -- A session open here but not in the stored list may never have been written.
-      if err and (entry.info or not err:match("not found")) then
-        vim.notify("claude-code: delete failed: " .. err, vim.log.levels.ERROR)
-        if not self.closed then
-          self:load()
-        end
-      end
-    end)
-  end
-  if entry.live then
-    local session = entry.live
-    sessions.close(session)
-    when_stopped(session, remove)
-  else
-    remove()
-  end
+  listing.delete(entry, function(err)
+    if err and not self.closed then
+      self:load()
+    end
+  end)
 end
 
 ---@private
@@ -640,11 +531,7 @@ function Picker:map_keys()
       return
     end
     self:close()
-    if entry.live then
-      sessions.show(entry.live)
-    else
-      sessions.open(entry.info)
-    end
+    listing.open(entry)
   end)
   map("<C-a>", function()
     self:close()
@@ -670,14 +557,8 @@ function Picker:map_keys()
       on_submit = function(title)
         if title == "" or title == entry.title then
           M.open(self.state)
-        elseif entry.live then
-          entry.live:rename(title)
-          M.open(self.state)
         else
-          control.request("rename_session", { session_id = entry.id, title = title, dir = entry.cwd }, function(err)
-            if err then
-              vim.notify("claude-code: rename failed: " .. err, vim.log.levels.ERROR)
-            end
+          listing.rename(entry, title, function()
             M.open(self.state)
           end)
         end

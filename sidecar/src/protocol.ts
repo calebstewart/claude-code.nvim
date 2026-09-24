@@ -127,7 +127,13 @@ export type Outbound =
 // Neovim sends requests; each gets exactly one response with the same id.
 
 export type ControlRequest =
-  | { type: "request"; id: number; method: "list_sessions"; params: { dir?: string; limit?: number } }
+  | {
+      type: "request";
+      id: number;
+      method: "list_sessions";
+      params: { dir?: string; limit?: number; include_worktrees?: boolean };
+    }
+  | { type: "request"; id: number; method: "list_projects"; params: Record<string, never> }
   | {
       type: "request";
       id: number;

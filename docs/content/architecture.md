@@ -27,6 +27,9 @@ which is why installing the plugin needs no build step.
 | `control.lua` | Answers the picker's requests from whichever store the transport implies |
 | `session.lua` | One conversation: its chat, its process, suspend and resume, replaying history |
 | `sessions.lua` | The sessions open in this Neovim; switching, cycling, idle suspension |
+| `listing.lua` | Sessions as the picker and sidebar list them, and the open/rename/delete/new actions both use |
+| `events.lua` | The `User ClaudeCodeSessionsChanged` autocmd, fired when a session opens, closes or changes status |
+| `neo-tree/` | The `claude_sessions` neo-tree source: tree, commands, components, and a cache that watches the disk |
 | `history.lua` | The shared prompt history |
 | `images.lua` | Clipboard and file images, resizing and encoding |
 | `modes.lua` | Permission modes and reading `defaultMode` from settings |
@@ -35,6 +38,10 @@ which is why installing the plugin needs no build step.
 **UI** (`lua/claude-code/ui/`) — `chat.lua` (layout, keymaps, status), `transcript.lua` (the append-only
 markdown buffer), `prompt.lua`, `permission.lua`, `question.lua`, `sessions.lua` (the picker), `slash.lua`,
 `plan.lua`, `tools.lua`, `input.lua`, `markdown.lua`, `welcome.lua`, `icons.lua` and `highlights.lua`.
+
+The control methods are `list_sessions`, `list_projects`, `get_messages`, `get_session_info`,
+`rename_session` and `delete_session`. `list_projects` has no Agent SDK counterpart, so `control.ts`
+implements it directly, mirroring the Lua store.
 
 > [!NOTE]
 > The Agent SDK normally brings its own platform-specific Claude binary, which can't be bundled into a

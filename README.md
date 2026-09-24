@@ -211,6 +211,9 @@ and vice versa, names included.
   the session, `<C-a>` starts a new one, `<C-r>` renames, `<C-x>` deletes (after confirming), and `<C-g>`
   toggles between this project and all projects. Markers show sessions open in this Neovim (`●` running,
   `○` suspended), ones waiting on you, and ones open in another Claude Code process (`◆`).
+- With neo-tree, add `"claude-code.neo-tree"` to its `sources` and `:Neotree claude_sessions` lists sessions
+  by project in a sidebar: `<CR>` opens, `a` starts one in that project, `r` renames, `d` deletes, `/` filters.
+  See the [Sessions docs](https://calebstew.art/claude-code.nvim/sessions/#the-sidebar-neo-tree).
 - Switching keeps the sidebar where it is. The session you left keeps running in the background, streaming
   into its transcript.
 - A background session that stays idle for `sessions.idle_timeout` minutes has its process stopped. Switching
@@ -268,7 +271,8 @@ Neovim (Lua) ─────┤
   transport and reusable on its own — see [Direct transport](#direct-transport-experimental).
 - **UI** (`lua/claude-code/ui/`): `chat.lua` (layout, keymaps, status), `transcript.lua` (append-only markdown
   buffer; headers, tool status, output and footers are extmarks so the text stays plain markdown), `prompt.lua`,
-  `permission.lua` (permission cards), `question.lua` (question dialog), `sessions.lua` (session picker),
+  `permission.lua` (permission cards), `question.lua` (question dialog), `sessions.lua` (session picker, on
+  `listing.lua`, which the neo-tree source in `neo-tree/` shares),
   `input.lua`, `markdown.lua` (decoration provider), `tools.lua`, `welcome.lua`, `icons.lua` and
   `highlights.lua`.
 

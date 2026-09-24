@@ -1,7 +1,7 @@
 +++
 title = "Sessions"
 weight = 5
-description = "The picker, switching between conversations, idle suspension, and resuming from disk."
+description = "The picker, the neo-tree sidebar, switching between conversations, idle suspension, and resuming from disk."
 +++
 
 Sessions are Claude Code's own, stored under `~/.claude/projects/`. A session started in the CLI shows up
@@ -24,6 +24,44 @@ of the most recent exchanges.
 
 Markers show sessions open in this Neovim (`●` running, `○` suspended), ones waiting on you, and ones open
 in another Claude Code process (`◆`).
+
+## The sidebar (neo-tree)
+
+With [neo-tree](https://github.com/nvim-neo-tree/neo-tree.nvim), sessions can also live in a sidebar, grouped
+by project, the way Claude Desktop lists them. Add the source to neo-tree's `sources` (listing every source
+you use, since setting `sources` replaces the defaults):
+
+```lua
+require("neo-tree").setup({
+  sources = { "filesystem", "buffers", "git_status", "claude-code.neo-tree" },
+  claude_sessions = {
+    sessions_per_page = 50, -- per project, before a "Show more" row
+  },
+})
+```
+
+Then `:Neotree claude_sessions` (or `:Neotree toggle claude_sessions`) opens it in the file tree's place;
+with neo-tree's `source_selector`, it gets a tab next to Files. The current project is listed first and
+expanded. Other projects load their sessions when expanded.
+
+| Key | |
+|---|---|
+| <kbd>CR</kbd> | Open the session, or expand/collapse a project |
+| <kbd>a</kbd> | Start a session in the project under the cursor (named, or leave it empty) |
+| <kbd>r</kbd> | Rename |
+| <kbd>d</kbd> | Delete, after confirming (same rules as the picker) |
+| <kbd>R</kbd> | Re-read everything from disk |
+| <kbd>/</kbd> | Filter the loaded sessions by words in their title, first prompt or branch |
+| <kbd>C-x</kbd> | Clear the filter |
+| <kbd>C</kbd> / <kbd>z</kbd> | Collapse a project / all projects |
+
+neo-tree's other defaults (`q`, `?`, `<`/`>`, `e`) work as usual; file operations are switched off.
+
+A session opens where the chat already is: in place of the chat you opened with `:Claude here`, or in the
+sidebar. With no chat showing, it takes over the last window if that's empty, and opens the sidebar
+otherwise. Rows carry the picker's markers, and a collapsed project shows the most pressing one among its
+open sessions. The tree follows changes on disk, such as a session started from the CLI, within a couple of
+seconds.
 
 ## Switching
 
@@ -52,4 +90,5 @@ picker.
 ## Sessions open elsewhere
 
 Sessions open in another Claude Code process are detected from the CLI's process registry in
-`~/.claude/sessions/`, on a best-effort basis. That is also what drives the `◆` marker in the picker.
+`~/.claude/sessions/`, on a best-effort basis. That is also what drives the `◆` marker in the picker and the
+sidebar.

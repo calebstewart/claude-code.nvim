@@ -8,7 +8,8 @@
 -- `last-prompt`) carry session-level facts.
 --
 -- These are the local-filesystem equivalents of the SDK's listSessions,
--- getSessionInfo, getSessionMessages, renameSession and deleteSession. No Claude process is
+-- getSessionInfo, getSessionMessages, renameSession and deleteSession, plus
+-- list_projects, which the SDK has no counterpart for. No Claude process is
 -- involved — the CLI is not consulted at all.
 
 local M = {}
@@ -235,6 +236,28 @@ local function session_info(session_id, path, mtime, dir)
   }
 end
 
+--- session_info results by transcript path, reused while the file's mtime and
+--- size are unchanged: listing re-reads every transcript otherwise, and a
+--- sidebar that refreshes as sessions change would do so constantly.
+---@type table<string, { mtime: integer, size: integer, info: table? }>
+local info_cache = {}
+
+---@param session_id string
+---@param path string
+---@param mtime integer
+---@param size integer
+---@param dir? string
+---@return table?
+local function cached_session_info(session_id, path, mtime, size, dir)
+  local hit = info_cache[path]
+  if hit and hit.mtime == mtime and hit.size == size then
+    return hit.info and vim.deepcopy(hit.info)
+  end
+  local info = session_info(session_id, path, mtime, dir)
+  info_cache[path] = { mtime = mtime, size = size, info = info }
+  return info and vim.deepcopy(info)
+end
+
 --- Git worktrees of `dir`, which keep their own project directories.
 ---@param dir string
 ---@return string[]
@@ -301,7 +324,13 @@ function M.list_sessions(opts)
           local path = root.dir .. "/" .. name
           local stat = vim.uv.fs_stat(path)
           if stat then
-            table.insert(found, { id = id, path = path, mtime = math.floor(stat.mtime.sec * 1000 + stat.mtime.nsec / 1e6), cwd = root.cwd })
+            table.insert(found, {
+              id = id,
+              path = path,
+              mtime = math.floor(stat.mtime.sec * 1000 + stat.mtime.nsec / 1e6),
+              size = stat.size,
+              cwd = root.cwd,
+            })
           end
         end
       end
@@ -315,7 +344,7 @@ function M.list_sessions(opts)
   local sessions = {}
   local skip = opts.offset or 0
   for _, candidate in ipairs(found) do
-    local info = session_info(candidate.id, candidate.path, candidate.mtime, candidate.cwd)
+    local info = cached_session_info(candidate.id, candidate.path, candidate.mtime, candidate.size, candidate.cwd)
     if info and opts.include_programmatic == false and PROGRAMMATIC[info.entrypoint] then
       info = nil
     end
@@ -331,6 +360,79 @@ function M.list_sessions(opts)
     end
   end
   return sessions
+end
+
+--- The working directory a transcript records, from its first entries.
+---@param path string
+---@return string?
+local function transcript_cwd(path)
+  local file = io.open(path, "r")
+  if not file then
+    return nil
+  end
+  local cwd
+  local lines = 0
+  for line in file:lines() do
+    local raw = line:match('"cwd":"(.-[^\\])"')
+    if raw then
+      local ok, decoded = pcall(vim.json.decode, '"' .. raw .. '"')
+      cwd = ok and decoded or nil
+      break
+    end
+    lines = lines + 1
+    if lines >= 50 then
+      break
+    end
+  end
+  file:close()
+  return cwd
+end
+
+--- Projects that have sessions, most recently used first. The directory names
+--- under `projects/` are a lossy encoding of the path, so each project's real
+--- path comes from its newest transcripts. Projects whose path can't be
+--- recovered are left out.
+---@return { cwd: string, sessions: integer, lastModified: integer }[]
+function M.list_projects()
+  local projects = {}
+  local root = M.projects_root()
+  local ok, dirs = pcall(vim.fs.dir, root)
+  if not ok then
+    return projects
+  end
+  for name, kind in dirs do
+    local dir = root .. "/" .. name
+    local files_ok, files = pcall(vim.fs.dir, dir)
+    if kind == "directory" and files_ok then
+      local transcripts = {}
+      for file, file_kind in files do
+        if file_kind == "file" and file:match("%.jsonl$") then
+          local stat = vim.uv.fs_stat(dir .. "/" .. file)
+          if stat then
+            local mtime = math.floor(stat.mtime.sec * 1000 + stat.mtime.nsec / 1e6)
+            table.insert(transcripts, { path = dir .. "/" .. file, mtime = mtime })
+          end
+        end
+      end
+      table.sort(transcripts, function(a, b)
+        return a.mtime > b.mtime
+      end)
+      local cwd
+      for i = 1, math.min(#transcripts, 5) do
+        cwd = transcript_cwd(transcripts[i].path)
+        if cwd then
+          break
+        end
+      end
+      if cwd then
+        table.insert(projects, { cwd = cwd, sessions = #transcripts, lastModified = transcripts[1].mtime })
+      end
+    end
+  end
+  table.sort(projects, function(a, b)
+    return a.lastModified > b.lastModified
+  end)
+  return projects
 end
 
 --- Locate a session's transcript.

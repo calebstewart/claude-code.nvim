@@ -36633,6 +36633,11 @@ function iie(e, t) {
   return null;
 }
 
+// src/control.ts
+import { open as open3, readdir as readdir3, stat as stat2 } from "node:fs/promises";
+import { homedir } from "node:os";
+import { join as join5 } from "node:path";
+
 // src/io.ts
 import { createInterface as createInterface2 } from "node:readline";
 function write(message) {
@@ -36655,10 +36660,64 @@ function onLines(handle2, onClose, onInvalid) {
 }
 
 // src/control.ts
+async function transcriptCwd(path) {
+  const file = await open3(path, "r");
+  try {
+    const { buffer, bytesRead } = await file.read({ buffer: Buffer.alloc(65536), position: 0 });
+    const match = /"cwd":"((?:[^"\\]|\\.)*)"/.exec(buffer.subarray(0, bytesRead).toString("utf8"));
+    return match ? JSON.parse(`"${match[1]}"`) : void 0;
+  } catch {
+    return void 0;
+  } finally {
+    await file.close();
+  }
+}
+async function listProjects() {
+  const root = join5(process.env.CLAUDE_CONFIG_DIR ?? join5(homedir(), ".claude"), "projects");
+  let names;
+  try {
+    names = await readdir3(root);
+  } catch {
+    return [];
+  }
+  const projects = [];
+  for (const name of names) {
+    const dir = join5(root, name);
+    let files;
+    try {
+      if (!(await stat2(dir)).isDirectory()) continue;
+      files = (await readdir3(dir)).filter((file) => file.endsWith(".jsonl"));
+    } catch {
+      continue;
+    }
+    const transcripts = [];
+    for (const file of files) {
+      try {
+        const info = await stat2(join5(dir, file));
+        if (info.isFile()) transcripts.push({ path: join5(dir, file), mtime: Math.floor(info.mtimeMs) });
+      } catch {
+      }
+    }
+    transcripts.sort((a, b) => b.mtime - a.mtime);
+    let cwd;
+    for (const transcript of transcripts.slice(0, 5)) {
+      cwd = await transcriptCwd(transcript.path);
+      if (cwd) break;
+    }
+    if (cwd) projects.push({ cwd, sessions: transcripts.length, lastModified: transcripts[0].mtime });
+  }
+  return projects.sort((a, b) => b.lastModified - a.lastModified);
+}
 async function dispatch(request) {
   switch (request.method) {
     case "list_sessions":
-      return MQt({ dir: request.params.dir, limit: request.params.limit });
+      return MQt({
+        dir: request.params.dir,
+        limit: request.params.limit,
+        includeWorktrees: request.params.include_worktrees
+      });
+    case "list_projects":
+      return listProjects();
     case "get_messages": {
       const { session_id, dir, tail } = request.params;
       const messages = await NQt(session_id, { dir });

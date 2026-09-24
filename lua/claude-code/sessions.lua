@@ -6,6 +6,7 @@
 
 local Session = require("claude-code.session")
 local config = require("claude-code.config")
+local events = require("claude-code.events")
 
 local M = {}
 
@@ -62,6 +63,7 @@ end
 local function add(session)
   table.insert(live, session)
   start_reaper()
+  events.sessions_changed()
 end
 
 --- Show `session` in the sidebar, in place of whichever session is there.
@@ -96,12 +98,14 @@ end
 
 --- Start a new session and show it.
 ---@param title? string
+---@param opts? { cwd?: string, show?: { here?: boolean } } `cwd`: run it there instead of Neovim's cwd.
 ---@return claude_code.Session?
-function M.new(title)
-  local session = Session.new({ title = title ~= "" and title or nil })
+function M.new(title, opts)
+  opts = opts or {}
+  local session = Session.new({ title = title ~= "" and title or nil, cwd = opts.cwd })
   if session then
     add(session)
-    M.show(session)
+    M.show(session, opts.show)
   end
   return session
 end
@@ -138,10 +142,11 @@ end
 
 --- Open a stored session (SDKSessionInfo), or switch to it if it's already open.
 ---@param info table
-function M.open(info)
+---@param show_opts? { here?: boolean }
+function M.open(info, show_opts)
   local existing = M.find(info.sessionId)
   if existing then
-    M.show(existing)
+    M.show(existing, show_opts)
     return
   end
   local pid = M.open_elsewhere()[info.sessionId]
@@ -154,7 +159,7 @@ function M.open(info)
   local session = Session.new({ info = info })
   if session then
     add(session)
-    M.show(session)
+    M.show(session, show_opts)
   end
 end
 
@@ -178,6 +183,7 @@ function M.close(session)
   if current == session then
     current = nil
   end
+  events.sessions_changed()
 end
 
 --- Nothing but empty scratch space is open: one tab, and only unnamed, unmodified,
