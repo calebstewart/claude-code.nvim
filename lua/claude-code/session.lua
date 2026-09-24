@@ -5,11 +5,11 @@
 
 local Chat = require("claude-code.ui.chat")
 local Permissions = require("claude-code.ui.permission")
-local Sidecar = require("claude-code.sidecar")
 local config = require("claude-code.config")
 local control = require("claude-code.control")
 local modes = require("claude-code.modes")
 local tools = require("claude-code.ui.tools")
+local transport = require("claude-code.transport")
 
 ---@class claude_code.Session
 ---@field id string Claude session id (chosen up front for new sessions).
@@ -32,7 +32,7 @@ local tools = require("claude-code.ui.tools")
 ---@field private tasks table<string, string> SDK task id -> Agent tool_use id.
 ---@field private notes string[] Notes to add once the current turn ends (e.g. a background agent finished).
 ---@field private persisted boolean Its transcript exists on disk (so it can be resumed).
----@field private sidecar? claude_code.Sidecar
+---@field private sidecar? claude_code.Sidecar|claude_code.Cli The session transport (see claude-code/transport.lua).
 ---@field private permissions claude_code.Permissions
 ---@field private suspending boolean
 ---@field private pending_title? string Rename to apply once the transcript exists.
@@ -157,7 +157,7 @@ end
 function Session:start()
   self.suspending = false
   local sidecar
-  sidecar = Sidecar.new({
+  sidecar = transport.session().new({
     on_event = function(event)
       -- Events can still arrive after the session was closed and its chat wiped.
       if self.sidecar == sidecar and self.chat:valid() then

@@ -12,6 +12,7 @@ local config = require("claude-code.config")
 ---@field resume? string
 ---@field session_id? string Id for a new session.
 ---@field title? string Title for a new session.
+---@field prompt_suggestions? boolean Ask for a predicted next prompt after each turn.
 
 ---@class claude_code.SidecarEvent
 ---@field type "ready"|"sdk"|"permission_request"|"permission_cancel"|"error"|"exit"|"response"
@@ -28,6 +29,7 @@ local config = require("claude-code.config")
 ---@field has_suggestions? boolean
 ---@field default_to_no? boolean
 ---@field suppress_always? boolean
+---@field agent_id? string permission_request: set when a subagent is asking.
 
 ---@class claude_code.Sidecar
 ---@field private proc? vim.SystemObj

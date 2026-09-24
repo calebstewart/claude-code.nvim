@@ -3,7 +3,8 @@ local M = {}
 ---@alias claude_code.PermissionMode "default"|"acceptEdits"|"plan"|"dontAsk"|"auto"|"bypassPermissions"
 
 ---@class claude_code.Config
----@field node string Node executable used to run the sidecar.
+---@field node string Node executable used to run the sidecar (unused when `transport` is "direct").
+---@field transport "sidecar"|"direct" How to reach Claude Code: through the Node sidecar, or by driving the `claude` CLI from Lua.
 ---@field claude? string Claude Code executable. Defaults to `claude` on $PATH.
 ---@field model? string Model alias or id; nil uses Claude Code's default.
 ---@field permission_mode? claude_code.PermissionMode Starting mode; nil uses Claude Code's settings (`defaultMode`).
@@ -34,6 +35,7 @@ local M = {}
 ---@type claude_code.Config
 M.defaults = {
   node = "node",
+  transport = "sidecar",
   claude = nil,
   model = nil,
   permission_mode = nil,

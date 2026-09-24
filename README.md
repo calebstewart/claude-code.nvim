@@ -9,7 +9,7 @@ between, all shared with the Claude Code CLI.
 ## Requirements
 
 - Neovim 0.10+
-- Node 18+
+- Node 18+ (not needed with `transport = "direct"`; see [Architecture](#architecture))
 - [Claude Code](https://docs.claude.com/en/docs/claude-code) installed and logged in (`claude` on `$PATH`)
 - Optional: a [Nerd Font](https://www.nerdfonts.com/) for icons (or set `icons = "unicode"`)
 
@@ -82,7 +82,10 @@ Defaults:
 
 ```lua
 {
-  node = "node",             -- Node executable used to run the sidecar
+  node = "node",             -- Node executable used to run the sidecar (unused when transport = "direct")
+  transport = "sidecar",     -- "sidecar": everything goes through Node and the Agent SDK
+                             -- "direct":  Neovim drives `claude` itself and reads transcripts in Lua,
+                             --            so Node is never started (experimental; see Architecture)
   claude = nil,              -- Claude Code executable; defaults to `claude` on $PATH
   model = nil,               -- e.g. "opus", "sonnet"; nil uses Claude Code's default
   permission_mode = nil,     -- starting mode: "default" | "acceptEdits" | "plan" | "dontAsk" | "auto" | "bypassPermissions";
@@ -253,10 +256,13 @@ Neovim (Lua) ─────┤
 - **Sidecar** (`sidecar/src/`): `session.ts` runs one conversation and forwards raw SDK messages, so rendering
   decisions live in Lua; `control.ts` handles session bookkeeping without starting Claude. The line protocol is
   defined in `protocol.ts`.
-- **Lua core** (`lua/claude-code/`): `sidecar.lua` spawns sidecars and frames the protocol; `control.lua` is the
-  request/response client for control mode; `session.lua` is one conversation (its chat, its process, suspend
+- **Lua core** (`lua/claude-code/`): `sidecar.lua` spawns sidecars and frames the protocol; `transport.lua`
+  picks between it and the direct transport in `cli.lua`; `control.lua` answers the picker's requests from
+  whichever store the transport implies; `session.lua` is one conversation (its chat, its process, suspend
   and resume, replaying history); `sessions.lua` tracks the sessions open in Neovim, switching and idle
   suspension; `history.lua` reads and writes the shared prompt history.
+- **Lua Agent SDK** (`lua/claude-agent-sdk/`): a standalone port of the Agent SDK, used by the direct
+  transport and reusable on its own — see [Direct transport](#direct-transport-experimental).
 - **UI** (`lua/claude-code/ui/`): `chat.lua` (layout, keymaps, status), `transcript.lua` (append-only markdown
   buffer; headers, tool status, output and footers are extmarks so the text stays plain markdown), `prompt.lua`,
   `permission.lua` (permission cards), `question.lua` (question dialog), `sessions.lua` (session picker),
@@ -265,6 +271,43 @@ Neovim (Lua) ─────┤
 
 The Agent SDK normally brings its own platform-specific Claude binary, which can't be bundled into a single
 file, so the sidecar runs the user's installed `claude` via `pathToClaudeCodeExecutable`.
+
+### Direct transport (experimental)
+
+`transport = "direct"` removes Node entirely — nothing spawns it, and `:checkhealth` stops requiring it:
+
+```
+Neovim (Lua) ──▶ claude          (lua/claude-agent-sdk)
+```
+
+The Agent SDK is a thin wrapper: it builds an argv, spawns `claude` with `--input-format stream-json
+--output-format stream-json`, and pumps newline-delimited JSON over stdio, with conversation messages and a
+bidirectional control channel sharing the one stream. `lua/claude-agent-sdk/` is a Lua port of it — usable on
+its own, independent of this plugin — laid out along the same seams:
+
+| File | Role |
+| --- | --- |
+| `options.lua` | options → `claude` argv and environment |
+| `transport.lua` | process lifecycle and newline-delimited JSON framing |
+| `control.lua` | `control_request`/`control_response` in both directions |
+| `query.lua` | message demultiplexing, the handshake, and the control methods |
+| `sessions.lua` | the session store: transcripts under `~/.claude/projects` |
+
+`query.lua` covers the SDK's imperative surface — `interrupt`, `set_permission_mode`, `set_model`,
+`get_context_usage`, `get_usage`, `read_file`, `rewind_files`, `mcp_*`, `reload_*`, and the rest — with
+`query:request(subtype, params, cb)` as the escape hatch for anything unwrapped. `sessions.lua` replaces the
+`--control` sidecar: it reads and writes the JSONL transcripts directly, so the session picker, history replay
+and `/rename` need no Claude process and no Node. `claude-code/cli.lua` adapts the query to the same events
+`sidecar.lua` emits, and `claude-code/control.lua` routes the picker to whichever store the transport implies,
+so `session.lua` is indifferent to the choice.
+
+The caveat is unchanged: the control-channel subtypes and the on-disk transcript format are not published APIs
+the way the CLI flags are, so they can shift between Claude Code releases with no compile-time warning. The
+session store is verified against the Node implementation by differential test rather than by specification —
+on every local transcript the two agree exactly, and where the SDK is self-inconsistent (a forked transcript,
+where it returns a rewound branch's reply but not the prompt that caused it) this drops the rewound branch
+cleanly instead. Control subtypes newer than the installed `claude` report an ordinary error rather than
+hanging.
 
 Shared state follows the CLI's conventions: prompt history is appended under the CLI's lock on
 `history.jsonl`, and sessions open elsewhere are detected from the CLI's process registry in
