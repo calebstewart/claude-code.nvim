@@ -215,7 +215,8 @@ and vice versa, names included.
   by project in a sidebar: `<CR>` opens, `a` starts one in that project, `r` renames, `d` deletes, `/` filters.
   See the [Sessions docs](https://calebstew.art/claude-code.nvim/sessions/#the-sidebar-neo-tree).
 - Switching keeps the sidebar where it is. The session you left keeps running in the background, streaming
-  into its transcript.
+  into its transcript. An untouched new session (no name, no messages, no draft) is only a placeholder: switching away
+  discards it.
 - A background session that stays idle for `sessions.idle_timeout` minutes has its process stopped. Switching
   back (or sending to it) resumes it; nothing is lost.
 - Resuming a session from disk redraws its conversation (the last 200 messages). If it's still open in another

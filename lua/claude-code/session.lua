@@ -149,6 +149,21 @@ function Session:running()
   return self.sidecar ~= nil and self.sidecar:running()
 end
 
+--- A new session nobody has used: unnamed, never written to disk, nothing
+--- in its transcript, and no draft in its prompt. Switching away from one
+--- discards it (see sessions.show), so trying "new" costs nothing.
+function Session:is_placeholder()
+  return not self.persisted
+    and not self.title
+    and not self.pending_title
+    and not self.busy
+    and not self.shell
+    and not self:needs_attention()
+    and self.chat:valid()
+    and self.chat.transcript:empty()
+    and self.chat.prompt:text() == ""
+end
+
 --- Waiting on the user (a permission card or question).
 function Session:needs_attention()
   return self.permissions:pending()

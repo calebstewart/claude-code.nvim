@@ -70,6 +70,7 @@ end
 ---@param session claude_code.Session
 ---@param opts? { here?: boolean } `here`: take over the current window instead of a sidebar.
 function M.show(session, opts)
+  local previous = current
   local show_opts = {}
   if current and current ~= session and current.chat:visible() then
     if current.chat:is_in_place() then
@@ -88,6 +89,10 @@ function M.show(session, opts)
   session.last_active = os.time()
   session:ensure_running()
   session.chat:show(show_opts)
+  -- An untouched new session is only a placeholder: leaving it discards it.
+  if previous and previous ~= session and previous:is_placeholder() then
+    M.close(previous)
+  end
 end
 
 --- Track a session created elsewhere (e.g. `:Claude here`), without showing it.

@@ -70,6 +70,11 @@ into its own transcript, so you can come back to a finished turn.
 
 `:Claude next` and `:Claude prev` cycle through the sessions open in this Neovim without the picker.
 
+A new session you leave untouched is only a placeholder: switching to another session from anywhere (the
+picker, the sidebar, `:Claude next`, `:Claude new`) closes it, and it disappears from the lists. It counts
+as used, and stays, once it has a name, a message or shell command in its transcript, or a draft in its
+prompt.
+
 ## Suspending and resuming
 
 A background session that stays idle for [`sessions.idle_timeout`](@/configuration.md#sessions-idle-timeout)
