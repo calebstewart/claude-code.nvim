@@ -12,6 +12,28 @@ nix develop
 
 That gives you Node, Neovim, stylua and zola — everything the repository builds.
 
+## Trying it out
+
+```sh
+nix run .#dev
+```
+
+This opens a Neovim with the plugin and nothing of yours: it starts with `--clean`, so your config,
+plugins and shada stay out of it, and writes no swap or undo files. Run from inside a checkout, it loads
+that checkout, so an edit takes effect the next time you start it. Anywhere else, it loads the flake's copy
+of the source, for example with `nix run github:calebstewart/claude-code.nvim#dev`. Arguments are passed to
+`nvim`.
+
+Its config is `dev/init.lua`. It sets up the plugin with shared prompt history off, adds base16-nvim, devicons
+and neo-tree (with the sessions source) from nixpkgs, and maps the commands under <kbd>Space c</kbd>. Edit it
+to try options. `CLAUDE_CODE_DEV_TRANSPORT=direct` switches to the Node-free transport.
+
+Claude itself isn't sandboxed. `claude` has to be on `$PATH` and logged in, and sessions are saved under
+`~/.claude/projects/` like any others. That's also what lets them message your other sessions.
+
+Without Nix, `nvim --clean -u dev/init.lua -i NONE` from the repository root does the same, minus the
+companion plugins.
+
 ## The sidecar
 
 `dist/sidecar.mjs` is **committed**, so that installing the plugin needs no build step. It has to be
@@ -103,5 +125,6 @@ build, which is the point.
 | `plugin/claude-code.lua` | The `:Claude` command |
 | `sidecar/src/` | The Node sidecar |
 | `dist/sidecar.mjs` | Its committed build output |
-| `nix/` | The plugin and docs derivations |
+| `nix/` | The plugin, docs and `dev` derivations |
+| `dev/init.lua` | The config `nix run .#dev` starts with |
 | `docs/` | This site |

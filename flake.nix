@@ -22,12 +22,25 @@
 
       # The documentation site. Not in the overlay: nobody installs a website.
       mkDocs = pkgs: pkgs.callPackage ./nix/docs.nix { };
+
+      # Not in the overlay either: it's for working on the plugin.
+      mkDev = pkgs: pkgs.callPackage ./nix/dev.nix { src = ./.; };
     in
     {
       packages = forAllSystems (pkgs: {
         default = plugin pkgs;
         claude-code-nvim = plugin pkgs;
         docs = mkDocs pkgs;
+        dev = mkDev pkgs;
+      });
+
+      # `nix run .#dev`: a Neovim with only this plugin loaded (see nix/dev.nix).
+      apps = forAllSystems (pkgs: {
+        dev = {
+          type = "app";
+          program = "${mkDev pkgs}/bin/claude-code-nvim-dev";
+          meta.description = "Neovim with only claude-code.nvim loaded, for trying changes";
+        };
       });
 
       # Adds pkgs.vimPlugins.claude-code-nvim.
@@ -53,6 +66,7 @@
       checks = forAllSystems (pkgs: {
         docs = mkDocs pkgs;
         plugin = plugin pkgs;
+        dev = mkDev pkgs;
       });
 
       formatter = forAllSystems (pkgs: pkgs.nixfmt);
