@@ -273,7 +273,7 @@ function Picker:layout()
   vim.wo[self.wins.list].cursorline = true
   vim.wo[self.wins.preview].wrap = false
   vim.wo[self.wins.preview].conceallevel = 2
-  local hints = " ⏎ open · ^A new · ^R rename · ^G all projects · esc "
+  local hints = " ⏎ open · ^A new · ^R rename · ^X delete · ^G all projects · esc "
   api.nvim_win_set_config(self.wins.preview, {
     footer = { { clip(hints, width - left - 4), "ClaudeCodeMuted" } },
     footer_pos = "right",
@@ -550,6 +550,74 @@ function Picker:move(delta)
   self:render()
 end
 
+--- Run `fn` once `session`'s process has exited (it may flush one last entry
+--- to the transcript on the way out), or after a few seconds regardless.
+---@param session claude_code.Session
+---@param fn fun()
+local function when_stopped(session, fn)
+  local deadline = vim.uv.now() + 5000
+  local function check()
+    if not session:running() or vim.uv.now() > deadline then
+      fn()
+    else
+      vim.defer_fn(check, 50)
+    end
+  end
+  check()
+end
+
+--- Delete the highlighted session, after asking. A session open in this Neovim
+--- is closed first; one open in another Claude Code process is left alone,
+--- since that process would just write the transcript back.
+---@private
+function Picker:delete_selected()
+  local entry = self.shown[self.index]
+  if not entry then
+    return
+  end
+  if entry.elsewhere then
+    vim.notify(
+      ("claude-code: this session is open in another Claude Code process (pid %d); close it there first"):format(
+        entry.elsewhere
+      ),
+      vim.log.levels.WARN
+    )
+    return
+  end
+  local title = clip((entry.title:gsub("\n", " ")), 60)
+  local question = entry.live and ("Delete “%s”? It will be closed, and its transcript removed."):format(title)
+    or ("Delete “%s”? Its transcript will be removed."):format(title)
+  if vim.fn.confirm(question, "&Delete\n&Cancel", 2, "Warning") ~= 1 then
+    return
+  end
+
+  -- Drop it from the list straight away; the transcript goes once it's safe.
+  self.entries = vim.tbl_filter(function(e)
+    return e.id ~= entry.id
+  end, self.entries)
+  self.state.selected_id = nil
+  self:filter()
+
+  local function remove()
+    control.request("delete_session", { session_id = entry.id, dir = entry.cwd }, function(err)
+      -- A session open here but not in the stored list may never have been written.
+      if err and (entry.info or not err:match("not found")) then
+        vim.notify("claude-code: delete failed: " .. err, vim.log.levels.ERROR)
+        if not self.closed then
+          self:load()
+        end
+      end
+    end)
+  end
+  if entry.live then
+    local session = entry.live
+    sessions.close(session)
+    when_stopped(session, remove)
+  else
+    remove()
+  end
+end
+
 ---@private
 function Picker:map_keys()
   local buf = self.bufs.prompt
@@ -618,6 +686,9 @@ function Picker:map_keys()
         M.open(self.state)
       end,
     })
+  end)
+  map("<C-x>", function()
+    self:delete_selected()
   end)
   map("<C-g>", function()
     self.state.scope = self.state.scope == "project" and "all" or "project"

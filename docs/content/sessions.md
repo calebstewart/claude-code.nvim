@@ -19,6 +19,7 @@ of the most recent exchanges.
 | <kbd>CR</kbd> | Switch to, or resume, the session |
 | <kbd>C-a</kbd> | Start a new session |
 | <kbd>C-r</kbd> | Rename |
+| <kbd>C-x</kbd> | Delete, after confirming. A session open in this Neovim is closed first; one open in another Claude Code process can't be deleted |
 | <kbd>C-g</kbd> | Toggle between this project and all projects |
 
 Markers show sessions open in this Neovim (`●` running, `○` suspended), ones waiting on you, and ones open

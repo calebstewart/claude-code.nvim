@@ -31806,6 +31806,80 @@ async function FY(e, t, n = {}, r) {
 `;
   await HY(e, o, n, ND(r));
 }
+async function zY(e, t = {}, n) {
+  if (!mt(e)) throw Error(`Invalid sessionId: ${e}`);
+  let r = ND(n);
+  for (let o of await VVe(t, r)) {
+    if (Re() && r !== void 0) {
+      let a = zc(o, r.isKeySegment);
+      if (a !== void 0) {
+        if (await WVe(a, e, r)) return;
+        continue;
+      }
+    }
+    let s = li(o, `${e}.jsonl`), i;
+    try {
+      ({ size: i } = await KVe(s));
+    } catch (a) {
+      let c = ke(a);
+      if (c === "ENOENT" || c === "ENOTDIR") continue;
+      throw a;
+    }
+    if (i === 0) continue;
+    await NY(s, { force: true }), await NY(li(o, e), { recursive: true, force: true });
+    return;
+  }
+  throw Error(t.dir ? `Session ${e} not found in project directory for ${t.dir}` : `Session ${e} not found in any project directory`);
+}
+async function WVe(e, t, n) {
+  let { backend: r, transcriptKey: o } = n, s = o(e, t), i = await r.statMeta(s);
+  if (!i.ok) {
+    if (i.error.code === "NotFound") return false;
+    throw Error("Session delete: transcript unreadable via storage", { cause: i.error });
+  }
+  if ((i.value.storedBytes ?? i.value.size) === 0) return false;
+  for (let c of ["transcript", "sidecar"]) {
+    let l = await r.deleteScope({ namespace: c, projectKey: e, sessionId: t });
+    if (!l.ok) throw Error("Session delete: session directory not deletable via storage", { cause: l.error });
+  }
+  let a = await r.delete(s);
+  if (!a.ok) throw Error("Session delete: transcript not deletable via storage", { cause: a.error });
+  return true;
+}
+async function VVe(e, t) {
+  if (e.dir) {
+    let r = await si(e.dir, Eb(t, Re())), o = await MY(r, t), s;
+    try {
+      s = await ni(r);
+    } catch {
+      s = [];
+    }
+    for (let i of s) {
+      if (i === r) continue;
+      o.push(...await MY(i, t));
+    }
+    return o;
+  }
+  let n = Bt();
+  if (Re() && t !== void 0) {
+    let r = await jY(t);
+    if (r === void 0) return [];
+    if (r.laterPageFailed) throw Error("Session delete: project listing incomplete via storage");
+    return r.names.map((o) => li(n, o));
+  }
+  try {
+    return (await UY(n, { withFileTypes: true })).filter((o) => o.isDirectory() || o.isSymbolicLink()).map((o) => li(n, o.name));
+  } catch {
+    return [];
+  }
+}
+async function MY(e, t) {
+  let n = Fn(t);
+  if (n === void 0 || !n.hoverRestOn) return Wr(e);
+  let r = await Wr(e, n), o = hd(e), s = process.platform === "win32", i = [];
+  for (let a of r) if (a === o || await gd(a, e, s, n)) i.push(a);
+  return i;
+}
 async function jY(e) {
   let t = [], n, r = 0;
   try {
@@ -36429,6 +36503,16 @@ async function FQt(e, t, n) {
   if (n?.sessionStore) return Hit(n.sessionStore, e, t, n.dir);
   return FY(e, t, n);
 }
+async function zQt(e, t) {
+  if (!mt(e)) throw new nt(`Invalid sessionId: ${e}`, "deleteSession: invalid sessionId (must be a UUID)");
+  if (t?.sessionStore) {
+    if (!t.sessionStore.delete) return;
+    let n = Ao(t.dir);
+    await t.sessionStore.delete({ projectKey: n, sessionId: e });
+    return;
+  }
+  return zY(e, t);
+}
 function pie(e) {
   let t = Tg(e ?? "."), n;
   try {
@@ -36584,6 +36668,9 @@ async function dispatch(request) {
       return await UQt(request.params.session_id, { dir: request.params.dir }) ?? null;
     case "rename_session":
       await FQt(request.params.session_id, request.params.title, { dir: request.params.dir });
+      return null;
+    case "delete_session":
+      await zQt(request.params.session_id, { dir: request.params.dir });
       return null;
     default:
       throw new Error(`Unknown method: ${request.method}`);

@@ -21,8 +21,9 @@ local sdk = require("claude-agent-sdk")
 | `sdk.get_session_info(session_id, opts?)` | One session's metadata, or `nil` |
 | `sdk.get_session_messages(session_id, opts?)` | One session's messages |
 | `sdk.rename_session(session_id, title, opts?)` | Set a session's title. Returns `ok, err` |
+| `sdk.delete_session(session_id, opts?)` | Delete a session's transcript and its subagents' transcripts. Returns `ok, err` |
 
-The four session functions never start a process.
+The session functions never start a process.
 
 | Function | `opts` |
 |---|---|
@@ -30,6 +31,7 @@ The four session functions never start a process.
 | `get_session_info` | `dir` |
 | `get_session_messages` | `dir`, `limit`, `offset`, `include_system_messages` |
 | `rename_session` | `dir` |
+| `delete_session` | `dir` |
 
 ## Options
 

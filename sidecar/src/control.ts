@@ -1,8 +1,8 @@
-// Control mode: session bookkeeping (list, read, rename) for the session
+// Control mode: session bookkeeping (list, read, rename, delete) for the session
 // picker. It never starts a Claude process; the SDK reads and writes the
 // session transcripts under ~/.claude/projects directly.
 
-import { getSessionInfo, getSessionMessages, listSessions, renameSession } from "@anthropic-ai/claude-agent-sdk";
+import { deleteSession, getSessionInfo, getSessionMessages, listSessions, renameSession } from "@anthropic-ai/claude-agent-sdk";
 import { onLines, write } from "./io.js";
 import type { ControlRequest, ControlResponse } from "./protocol.js";
 
@@ -19,6 +19,9 @@ async function dispatch(request: ControlRequest): Promise<unknown> {
       return (await getSessionInfo(request.params.session_id, { dir: request.params.dir })) ?? null;
     case "rename_session":
       await renameSession(request.params.session_id, request.params.title, { dir: request.params.dir });
+      return null;
+    case "delete_session":
+      await deleteSession(request.params.session_id, { dir: request.params.dir });
       return null;
     default:
       throw new Error(`Unknown method: ${(request as { method: string }).method}`);

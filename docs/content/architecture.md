@@ -9,7 +9,7 @@ description = "The Node sidecar, the Lua core, and the experimental Node-free di
 ```
                   ┌─▶ dist/sidecar.mjs            (one per session: Agent SDK) ──▶ claude
 Neovim (Lua) ─────┤
-  NDJSON / stdio  └─▶ dist/sidecar.mjs --control  (one: list/read/rename sessions)
+  NDJSON / stdio  └─▶ dist/sidecar.mjs --control  (one: list/read/rename/delete sessions)
 ```
 
 **Sidecar** (`sidecar/src/`) — `session.ts` runs one conversation and forwards raw SDK messages, so every

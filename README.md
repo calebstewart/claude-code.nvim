@@ -208,9 +208,9 @@ and vice versa, names included.
 
 - `:Claude sessions` opens a picker of this project's sessions: title, when it was last used, and a preview of
   the most recent exchanges. Type to filter; `<C-n>`/`<C-p>` (or arrows) move, `<CR>` switches to or resumes
-  the session, `<C-a>` starts a new one, `<C-r>` renames, and `<C-g>` toggles between this project and all
-  projects. Markers show sessions open in this Neovim (`●` running, `○` suspended), ones waiting on you, and
-  ones open in another Claude Code process (`◆`).
+  the session, `<C-a>` starts a new one, `<C-r>` renames, `<C-x>` deletes (after confirming), and `<C-g>`
+  toggles between this project and all projects. Markers show sessions open in this Neovim (`●` running,
+  `○` suspended), ones waiting on you, and ones open in another Claude Code process (`◆`).
 - Switching keeps the sidebar where it is. The session you left keeps running in the background, streaming
   into its transcript.
 - A background session that stays idle for `sessions.idle_timeout` minutes has its process stopped. Switching
@@ -253,7 +253,7 @@ The transcript (`claude-code-chat`), prompt (`claude-code-prompt`) and the space
 ```
                   ┌─▶ dist/sidecar.mjs            (one per session: Agent SDK) ──▶ claude
 Neovim (Lua) ─────┤
-  NDJSON / stdio  └─▶ dist/sidecar.mjs --control  (one: list/read/rename sessions)
+  NDJSON / stdio  └─▶ dist/sidecar.mjs --control  (one: list/read/rename/delete sessions)
 ```
 
 - **Sidecar** (`sidecar/src/`): `session.ts` runs one conversation and forwards raw SDK messages, so rendering

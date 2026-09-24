@@ -169,4 +169,11 @@ function M.rename_session(session_id, title, opts)
   return require("claude-agent-sdk.sessions").rename_session(session_id, title, opts)
 end
 
+---@param session_id string
+---@param opts? { dir?: string }
+---@return boolean ok, string? err
+function M.delete_session(session_id, opts)
+  return require("claude-agent-sdk.sessions").delete_session(session_id, opts)
+end
+
 return M

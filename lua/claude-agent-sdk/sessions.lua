@@ -8,7 +8,7 @@
 -- `last-prompt`) carry session-level facts.
 --
 -- These are the local-filesystem equivalents of the SDK's listSessions,
--- getSessionInfo, getSessionMessages and renameSession. No Claude process is
+-- getSessionInfo, getSessionMessages, renameSession and deleteSession. No Claude process is
 -- involved — the CLI is not consulted at all.
 
 local M = {}
@@ -484,6 +484,26 @@ function M.rename_session(session_id, title, opts)
   file:close()
   if not ok then
     return false, tostring(write_err)
+  end
+  return true
+end
+
+--- Delete a session: its transcript and the directory holding its subagents'
+--- transcripts, as the SDK's deleteSession does.
+---@param session_id string
+---@param opts? { dir?: string }
+---@return boolean ok, string? err
+function M.delete_session(session_id, opts)
+  local path = M.find_transcript(session_id, opts)
+  if not path then
+    return false, "session not found: " .. session_id
+  end
+  if vim.fn.delete(path) ~= 0 then
+    return false, "couldn't delete " .. path
+  end
+  local subagents = path:gsub("%.jsonl$", "")
+  if vim.fn.isdirectory(subagents) == 1 and vim.fn.delete(subagents, "rf") ~= 0 then
+    return false, "couldn't delete " .. subagents
   end
   return true
 end
