@@ -1,0 +1,48 @@
+# Zola configuration for the documentation site at
+# https://calebstew.art/claude-code.nvim.
+#
+# The site is a *project* Pages site, so it is served from a sub-path of the
+# domain rather than its root. Every internal link therefore goes through
+# `get_url` or a `@/`-prefixed markdown link, both of which are rewritten
+# against `base_url`; a hand-written "/foo/" would resolve to the landing page's
+# domain root and 404.
+base_url = "https://calebstew.art/claude-code.nvim"
+
+title = "claude-code.nvim"
+description = "Claude Code inside Neovim, driven by the Claude Agent SDK rather than a terminal emulator: a native chat sidebar, inline permission prompts, and sessions shared with the Claude Code CLI."
+default_language = "en"
+
+compile_sass = false
+build_search_index = false
+generate_feeds = false
+minify_html = true
+
+[markdown]
+smart_punctuation = true
+
+# `> [!NOTE]` and `> [!WARNING]` blocks.
+github_alerts = true
+
+# Each `##` gets a quiet "#" beside it, rendered by templates/anchor-link.html,
+# so a row in the configuration and SDK reference tables can be linked to
+# directly.
+insert_anchor_links = "right"
+
+# `class` emits class names instead of inline colours, and both the light and
+# the dark class go on every token span; which one wins is decided by which of
+# the two generated stylesheets is active, and `base.html` gates the dark one on
+# `prefers-color-scheme`. Inline colours would bake one theme into the HTML and
+# ignore the reader's setting.
+[markdown.highlighting]
+style = "class"
+light_theme = "ayu-light"
+dark_theme = "ayu-dark"
+add_color_scheme = true
+
+[extra]
+tagline = "Claude Code inside Neovim: a native chat sidebar, inline permission prompts, and sessions you share with the CLI."
+repository = "https://github.com/calebstewart/claude-code.nvim"
+
+# Absolute, not root-relative: the landing page lives at the domain root, which
+# is *above* this site's base_url, so `get_url` cannot express it.
+author_site = "https://calebstew.art"

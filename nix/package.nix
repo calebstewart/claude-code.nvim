@@ -33,6 +33,7 @@ vimUtils.buildVimPlugin {
   meta = {
     description = "Claude Code in Neovim, driven by the Claude Agent SDK";
     homepage = "https://github.com/calebstewart/claude-code.nvim";
+    license = lib.licenses.mit;
     platforms = lib.platforms.unix;
   };
 }

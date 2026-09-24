@@ -19,11 +19,15 @@
           src = ./.;
           inherit version;
         };
+
+      # The documentation site. Not in the overlay: nobody installs a website.
+      mkDocs = pkgs: pkgs.callPackage ./nix/docs.nix { };
     in
     {
       packages = forAllSystems (pkgs: {
         default = plugin pkgs;
         claude-code-nvim = plugin pkgs;
+        docs = mkDocs pkgs;
       });
 
       # Adds pkgs.vimPlugins.claude-code-nvim.
@@ -39,8 +43,16 @@
             pkgs.nodejs
             pkgs.neovim
             pkgs.stylua
+            pkgs.zola
           ];
         };
+      });
+
+      # A broken template or a dead `@/` link fails the site build, so the docs
+      # cannot go stale unnoticed.
+      checks = forAllSystems (pkgs: {
+        docs = mkDocs pkgs;
+        plugin = plugin pkgs;
       });
 
       formatter = forAllSystems (pkgs: pkgs.nixfmt);

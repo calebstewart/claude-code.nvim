@@ -6,6 +6,9 @@ between, all shared with the Claude Code CLI.
 
 > Early days: expect rough edges.
 
+**[Documentation](https://calebstew.art/claude-code.nvim)** — installation, every configuration option, and the
+Lua Agent SDK port.
+
 ## Requirements
 
 - Neovim 0.10+
