@@ -24,6 +24,13 @@ vimUtils.buildVimPlugin {
     ];
   };
 
+  # The neo-tree source needs neo-tree itself, which the require check doesn't install.
+  nvimSkipModules = [
+    "claude-code.neo-tree.init"
+    "claude-code.neo-tree.commands"
+    "claude-code.neo-tree.components"
+  ];
+
   # Default the sidecar's runtime to this Node.js; `node` in setup() still overrides it.
   postPatch = ''
     substituteInPlace lua/claude-code/config.lua \
