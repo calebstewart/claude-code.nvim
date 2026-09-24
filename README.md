@@ -181,6 +181,16 @@ it with `permission_mode` in `setup()`.
 If this happens in a session you're not looking at, you get a notification, and the card or dialog appears when
 you switch to that session.
 
+### Subagents
+
+When Claude launches a subagent (the Agent tool), its line in the transcript shows what it's doing while it
+runs (`⎿ Running … · 3 tools · 12s`), then a summary when it's done. `<Tab>` on the line expands it: the
+subagent's own tool calls with their status, followed by its report. Permission requests from a subagent
+appear under its line and say which subagent is asking.
+
+Background subagents keep their line running after Claude moves on; the prompt's border shows how many are
+still running, and a note appears in the transcript when one finishes.
+
 ### Sessions
 
 Sessions are Claude Code's own, stored under `~/.claude/projects/`, so sessions started in the CLI show up here

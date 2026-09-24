@@ -20,6 +20,9 @@ local RULE = string.rep("─", 300)
 ---@field icon integer extmark id of the status icon
 ---@field summary? integer extmark id of the summary line
 ---@field body? integer extmark id of the expanded output
+---@field subagent? claude_code.Subagent For Agent/Task calls: what the subagent is doing.
+---@field background? boolean Launched in the background: still running after its call returned.
+---@field activity? integer extmark id of a running subagent's live activity line
 
 ---@class claude_code.Transcript
 ---@field buf integer
@@ -227,7 +230,11 @@ end
 ---@param entry claude_code.ToolEntry
 function Transcript:icon_chunk(entry)
   local i = icons.get()
-  local glyph = entry.status == "pending" and i.spinner[self.frame] or icons.tool(entry.name)
+  local glyph = icons.tool(entry.name)
+  if entry.status == "pending" then
+    -- Background agents outlive the turn (and its spinner timer): a static glyph.
+    glyph = entry.background and i.background or i.spinner[self.frame]
+  end
   return { { glyph .. " ", STATUS_HL[entry.status] } }
 end
 
@@ -287,14 +294,23 @@ function Transcript:tool_result(id, status, result)
   end
   entry.status = status
   entry.result = result
+  entry.background = nil
+  if entry.activity then
+    api.nvim_buf_del_extmark(self.buf, ns, entry.activity)
+    entry.activity = nil
+  end
   api.nvim_buf_set_extmark(self.buf, ns, row, 0, {
     id = entry.icon,
     virt_text = self:icon_chunk(entry),
     virt_text_pos = "inline",
     right_gravity = false,
   })
-  local summary = status ~= "cancelled"
-    and tools.summarize(entry.name, entry.input, result or "", status == "error")
+  local summary
+  if entry.subagent and status ~= "cancelled" then
+    summary = tools.subagent_summary(entry.subagent)
+  elseif status ~= "cancelled" then
+    summary = tools.summarize(entry.name, entry.input, result or "", status == "error")
+  end
   if summary then
     entry.summary = api.nvim_buf_set_extmark(self.buf, ns, row, 0, {
       virt_lines = {
@@ -316,8 +332,53 @@ function Transcript:render_body(entry, row)
     api.nvim_buf_del_extmark(self.buf, ns, entry.body)
   end
   entry.body = api.nvim_buf_set_extmark(self.buf, ns, row, 0, {
-    virt_lines = tools.body(entry.name, entry.input, entry.result, self:width()),
+    virt_lines = entry.subagent and tools.subagent_body(entry.subagent, entry.result, self:width())
+      or tools.body(entry.name, entry.input, entry.result, self:width()),
   })
+end
+
+--- Attach (or refresh) what a subagent is doing to its Agent/Task call: the live
+--- activity line while it runs, and the expanded view.
+---@param id string tool_use id of the Agent call
+---@param sub claude_code.Subagent
+function Transcript:subagent(id, sub)
+  local entry = self.tools[id]
+  local row = self:tool_row(id)
+  if not entry or not row then
+    return
+  end
+  entry.subagent = sub
+  if entry.status == "pending" then
+    entry.activity = api.nvim_buf_set_extmark(self.buf, ns, row, 0, {
+      id = entry.activity,
+      virt_lines = {
+        { { "  ⎿  ", "ClaudeCodeToolGutter" }, { tools.subagent_activity(sub), "ClaudeCodeToolPending" } },
+      },
+    })
+  end
+  if entry.body then
+    self:render_body(entry, row)
+  end
+end
+
+--- The call returned but the work goes on (a background agent): keep it running.
+---@param id string tool_use id
+function Transcript:tool_background(id)
+  local entry = self.tools[id]
+  local row = self:tool_row(id)
+  if not entry or not row or entry.status ~= "pending" then
+    return
+  end
+  entry.background = true
+  api.nvim_buf_set_extmark(self.buf, ns, row, 0, {
+    id = entry.icon,
+    virt_text = self:icon_chunk(entry),
+    virt_text_pos = "inline",
+    right_gravity = false,
+  })
+  if entry.subagent then
+    self:subagent(id, entry.subagent)
+  end
 end
 
 --- Expand or collapse the output of the tool call on `row`.
@@ -341,7 +402,7 @@ end
 --- Mark tool calls that never got a result (e.g. after an interrupt).
 function Transcript:cancel_pending_tools()
   for id, entry in pairs(self.tools) do
-    if entry.status == "pending" then
+    if entry.status == "pending" and not entry.background then
       self:tool_result(id, "cancelled")
     end
   end
@@ -355,7 +416,7 @@ function Transcript:tick(frame)
     return
   end
   for id, entry in pairs(self.tools) do
-    local row = entry.status == "pending" and self:tool_row(id)
+    local row = entry.status == "pending" and not entry.background and self:tool_row(id)
     if row then
       api.nvim_buf_set_extmark(self.buf, ns, row, 0, {
         id = entry.icon,

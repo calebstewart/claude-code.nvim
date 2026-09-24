@@ -22,6 +22,8 @@ local ns = api.nvim_create_namespace("claude-code.permission")
 ---@field has_suggestions boolean
 ---@field default_to_no boolean
 ---@field suppress_always boolean
+---@field anchor? string tool_use id to show the card under (a subagent's Agent call).
+---@field subagent? string Set when a subagent is asking: its description.
 
 ---@class claude_code.PermissionAnswer
 ---@field behavior "allow"|"deny"
@@ -196,6 +198,9 @@ end
 local function permission_card(request, width)
   local inner = math.max(width - 6, 20)
   local rows = {} ---@type claude_code.Chunk[][]
+  if request.subagent then
+    table.insert(rows, { { icons.tool("Agent") .. " Subagent: " .. request.subagent, "ClaudeCodeMuted" } })
+  end
   for _, line in ipairs(wrap(request.title or ("Claude wants to use " .. request.tool_name), inner)) do
     table.insert(rows, { { line, "ClaudeCodeCardTitle" } })
   end
@@ -335,7 +340,9 @@ end
 function Permissions:render()
   local request = self.queue[1]
   local transcript = self.chat.transcript
-  local row = transcript:tool_row(request.tool_use_id) or (api.nvim_buf_line_count(transcript.buf) - 1)
+  local row = (request.anchor and transcript:tool_row(request.anchor))
+    or transcript:tool_row(request.tool_use_id)
+    or (api.nvim_buf_line_count(transcript.buf) - 1)
   local win = transcript:window()
   local width = win and api.nvim_win_get_width(win) or 80
   self.card = api.nvim_buf_set_extmark(transcript.buf, ns, row, 0, {

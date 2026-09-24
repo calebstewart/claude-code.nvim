@@ -122,6 +122,102 @@ function M.diff_lines(input)
   return out
 end
 
+---@class claude_code.SubagentTool
+---@field id string
+---@field name string
+---@field input table
+---@field status "pending"|"success"|"error"
+
+--- What a subagent (an Agent/Task tool call) is doing, gathered from its own
+--- messages and the SDK's task events.
+---@class claude_code.Subagent
+---@field description? string
+---@field kind? string Subagent type (e.g. "general-purpose").
+---@field background? boolean Launched with run_in_background.
+---@field status string "running", then "completed", "failed" or "stopped".
+---@field activity? string Latest progress, e.g. "Running Print contents of one.txt".
+---@field usage? { total_tokens: integer, tool_uses: integer, duration_ms: integer }
+---@field started integer os.time()
+---@field tools claude_code.SubagentTool[] Its own tool calls, in order.
+---@field index table<string, integer> tool_use id -> position in `tools`.
+---@field report? string Its last text (the report it hands back).
+
+---@param sub claude_code.Subagent
+local function stats(sub)
+  local parts = {}
+  local count = sub.usage and sub.usage.tool_uses or #sub.tools
+  if count > 0 then
+    table.insert(parts, ("%d tool%s"):format(count, count == 1 and "" or "s"))
+  end
+  local ms = sub.usage and sub.usage.duration_ms or (os.time() - sub.started) * 1000
+  if ms >= 1000 then
+    table.insert(parts, ("%ds"):format(math.floor(ms / 1000)))
+  end
+  return parts
+end
+
+--- The live line under a running subagent: what it's doing and how far along.
+---@param sub claude_code.Subagent
+---@return string
+function M.subagent_activity(sub)
+  local parts = { sub.activity or (sub.background and "Running in the background" or "Starting…") }
+  vim.list_extend(parts, stats(sub))
+  return truncate(table.concat(parts, " · "), 120)
+end
+
+--- The summary once it's done.
+---@param sub claude_code.Subagent
+---@return string
+function M.subagent_summary(sub)
+  local parts = { sub.status == "completed" and "Done" or (sub.status:gsub("^%l", string.upper)) }
+  vim.list_extend(parts, stats(sub))
+  return table.concat(parts, " · ")
+end
+
+--- Expanded subagent: its tool calls with their status, then its report.
+---@param sub claude_code.Subagent
+---@param result? string The Agent tool's result (the report), if it's back.
+---@param width integer
+---@return claude_code.VirtLine[]
+function M.subagent_body(sub, result, width)
+  local gutter = { "  │ ", "ClaudeCodeToolGutter" }
+  local virt = {} ---@type claude_code.VirtLine[]
+  local header = { sub.kind or "subagent" }
+  if sub.background then
+    table.insert(header, "background")
+  end
+  table.insert(virt, { gutter, { table.concat(header, " · "), "ClaudeCodeToolDetail" } })
+  local status_icon = {
+    pending = { "…", "ClaudeCodeToolPending" },
+    success = { "✓", "ClaudeCodeToolSuccess" },
+    error = { "✗", "ClaudeCodeToolError" },
+  }
+  for _, t in ipairs(sub.tools) do
+    local detail = M.detail(t.input)
+    local mark = status_icon[t.status] or status_icon.pending
+    table.insert(virt, {
+      gutter,
+      { mark[1] .. " ", mark[2] },
+      { require("claude-code.ui.icons").tool(t.name) .. " " .. t.name, "ClaudeCodeToolName" },
+      { detail and (" " .. truncate(detail, math.max(width - #t.name - 12, 10))) or "", "ClaudeCodeToolDetail" },
+    })
+  end
+  local report = vim.trim(result or sub.report or "")
+  if report ~= "" then
+    table.insert(virt, { gutter })
+    local max = config.options.tool_output.max_lines
+    local lines = vim.split(report, "\n", { plain = true })
+    for i, line in ipairs(lines) do
+      if i > max then
+        table.insert(virt, { gutter, { ("… %d more lines"):format(#lines - max), "ClaudeCodeMuted" } })
+        break
+      end
+      table.insert(virt, { gutter, { truncate(line:gsub("\t", "  "), math.max(width - 4, 10)), "ClaudeCodeToolOutput" } })
+    end
+  end
+  return virt
+end
+
 --- The expanded view of a tool call: its diff for edits, otherwise its output.
 ---@param name string
 ---@param input table

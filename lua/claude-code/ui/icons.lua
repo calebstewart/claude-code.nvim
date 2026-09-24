@@ -18,6 +18,7 @@ local config = require("claude-code.config")
 ---@field pill [string, string] Left and right caps for header pills.
 ---@field plan string
 ---@field image string
+---@field background string
 ---@field tools table<string, string> Tool name -> icon; `default` for anything else.
 
 ---@type table<string, claude_code.Icons>
@@ -37,6 +38,7 @@ local sets = {
     question = "\u{f128}", -- fa-question
     plan = "\u{f022}", -- fa-list_alt
     image = "\u{f03e}", -- fa-picture_o
+    background = "\u{f1da}", -- fa-history
     pill = { "\u{e0b6}", "\u{e0b4}" }, -- powerline rounded caps
     spinner = { "⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏" },
     tools = {
@@ -73,6 +75,7 @@ local sets = {
     question = "?",
     plan = "☰",
     image = "▣",
+    background = "◷",
     pill = { "", "" },
     spinner = { "⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏" },
     tools = {

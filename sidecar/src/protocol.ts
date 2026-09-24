@@ -92,6 +92,8 @@ export interface PermissionRequestEvent {
   default_to_no: boolean;
   /** Don't offer "always allow" even if suggestions exist. */
   suppress_always: boolean;
+  /** Set when a subagent is asking. */
+  agent_id?: string;
 }
 
 /** Sent when the SDK aborts a pending permission request (e.g. after an interrupt). */

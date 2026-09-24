@@ -36675,7 +36675,8 @@ var canUseTool = (toolName, input, options) => new Promise((resolve5) => {
     description: options.description,
     has_suggestions: (options.suggestions?.length ?? 0) > 0,
     default_to_no: options.defaultToNo ?? false,
-    suppress_always: options.suppressAlwaysAllowRule ?? false
+    suppress_always: options.suppressAlwaysAllowRule ?? false,
+    agent_id: options.agentID
   });
 });
 async function run(init) {

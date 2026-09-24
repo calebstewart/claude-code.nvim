@@ -27,6 +27,10 @@ local tools = require("claude-code.ui.tools")
 ---@field private shell_count integer
 ---@field private replay_shell? string Replaying: id of the `!command` awaiting its output.
 ---@field private silent_results integer Results still to come from context-only messages (they have no turn to finish).
+---@field private subagents table<string, claude_code.Subagent> Agent/Task tool_use id -> its subagent.
+---@field private child_parent table<string, string> A subagent's own tool_use id -> its Agent call.
+---@field private tasks table<string, string> SDK task id -> Agent tool_use id.
+---@field private notes string[] Notes to add once the current turn ends (e.g. a background agent finished).
 ---@field private persisted boolean Its transcript exists on disk (so it can be resumed).
 ---@field private sidecar? claude_code.Sidecar
 ---@field private permissions claude_code.Permissions
@@ -82,6 +86,10 @@ function Session.new(opts)
     streamed = {},
     shell_count = 0,
     silent_results = 0,
+    subagents = {},
+    child_parent = {},
+    tasks = {},
+    notes = {},
     suspending = false,
     in_reply = false,
     reply_has_text = false,
@@ -454,6 +462,13 @@ function Session:on_event(event)
   elseif event.type == "sdk" then
     self:on_sdk_message(event.message --[[@as table]])
   elseif event.type == "permission_request" then
+    local parent = self.child_parent[event.tool_use_id]
+    if parent then
+      -- A subagent is asking: show the card under its Agent call, and say who's asking.
+      local sub = self.subagents[parent]
+      event.anchor = parent
+      event.subagent = sub and (sub.description or sub.kind) or "subagent"
+    end
     self.permissions:request(event --[[@as claude_code.PermissionRequest]])
   elseif event.type == "permission_cancel" then
     self.permissions:cancel(event.id --[[@as integer]])
@@ -465,11 +480,15 @@ end
 ---@private
 ---@param msg table An SDKMessage from @anthropic-ai/claude-agent-sdk.
 function Session:on_sdk_message(msg)
-  -- Subagent traffic is nested under a tool call; the top-level transcript skips it for now.
+  -- A subagent's own messages: gathered under its Agent call rather than shown inline.
   if msg.parent_tool_use_id then
+    self:on_subagent_message(msg)
     return
   end
   local transcript = self.chat.transcript
+  if msg.type == "system" and self:on_task_event(msg) then
+    return
+  end
 
   if msg.type == "system" and (msg.subtype == "init" or msg.subtype == "status") and msg.permissionMode then
     -- Claude Code reports the mode each turn, and when it changes (e.g. leaving plan mode).
@@ -528,7 +547,7 @@ function Session:on_sdk_message(msg)
       end
     end
   elseif msg.type == "user" then
-    self:tool_results(msg.message and msg.message.content)
+    self:tool_results(msg.message and msg.message.content, msg.tool_use_result)
   elseif msg.type == "result" then
     if (msg.num_turns or 0) == 0 and self.silent_results > 0 then
       self.silent_results = self.silent_results - 1
@@ -540,16 +559,143 @@ end
 
 ---@private
 ---@param content any user message content
-function Session:tool_results(content)
+---@param structured? table The message's tool_use_result (the tool's own output object).
+function Session:tool_results(content, structured)
   for _, block in ipairs(type(content) == "table" and content or {}) do
     if block.type == "tool_result" then
-      self.chat.transcript:tool_result(
-        block.tool_use_id,
-        block.is_error == true and "error" or "success",
-        tools.result_text(block.content)
-      )
+      local sub = self.subagents[block.tool_use_id]
+      if type(structured) == "table" and (structured.isAsync or structured.status == "async_launched") then
+        -- A background agent: the call returns at once but the agent keeps going.
+        self.chat.transcript:tool_background(block.tool_use_id)
+      else
+        local text = tools.result_text(block.content)
+        if sub then
+          sub.status = block.is_error and "failed" or "completed"
+          text = self:subagent_report(sub, text, structured)
+        end
+        self.chat.transcript:tool_result(block.tool_use_id, block.is_error == true and "error" or "success", text)
+      end
       self:activity("Thinking")
     end
+  end
+end
+
+--- The subagent behind an Agent/Task call, created on first sight.
+---@private
+---@param id string tool_use id of the Agent call
+---@return claude_code.Subagent
+function Session:subagent(id)
+  local sub = self.subagents[id]
+  if not sub then
+    sub = { status = "running", started = os.time(), tools = {}, index = {} }
+    self.subagents[id] = sub
+  end
+  return sub
+end
+
+--- A finished subagent's report: the Agent call's result text without the parts
+--- addressed to Claude (the hand-back preamble, agent id and usage trailer). Totals
+--- come from the tool's structured output.
+---@private
+---@param sub claude_code.Subagent
+---@param text string The Agent call's result text.
+---@param structured? table AgentOutput
+---@return string
+function Session:subagent_report(sub, text, structured)
+  if type(structured) == "table" and structured.totalToolUseCount then
+    sub.usage = {
+      tool_uses = structured.totalToolUseCount,
+      duration_ms = structured.totalDurationMs,
+      total_tokens = structured.totalTokens,
+    }
+  end
+  local report = text
+    :gsub("^%s*%[Subagent hand%-back%][^\n]*\n", "")
+    :gsub("%s*<usage>.-</usage>%s*$", "")
+    :gsub("%s*agentId: [^\n]*%s*$", "")
+  return vim.trim(report)
+end
+
+--- Internal plumbing a subagent uses to return; not worth listing.
+local HIDDEN_SUBAGENT_TOOLS = { SubagentHandback = true }
+
+--- A message from inside a subagent: its tool calls, their results, its report.
+---@private
+---@param msg table
+function Session:on_subagent_message(msg)
+  local parent = msg.parent_tool_use_id
+  local sub = self:subagent(parent)
+  local content = type(msg.message) == "table" and msg.message.content
+  if msg.type == "assistant" and type(content) == "table" then
+    for _, block in ipairs(content) do
+      if block.type == "tool_use" and not HIDDEN_SUBAGENT_TOOLS[block.name] then
+        table.insert(sub.tools, { id = block.id, name = block.name, input = block.input or {}, status = "pending" })
+        sub.index[block.id] = #sub.tools
+        self.child_parent[block.id] = parent
+      elseif block.type == "text" and vim.trim(block.text or "") ~= "" then
+        sub.report = block.text
+      end
+    end
+  elseif msg.type == "user" and type(content) == "table" then
+    for _, block in ipairs(content) do
+      local i = block.type == "tool_result" and sub.index[block.tool_use_id]
+      if i then
+        sub.tools[i].status = block.is_error and "error" or "success"
+      end
+    end
+  else
+    return
+  end
+  self.chat.transcript:subagent(parent, sub)
+end
+
+--- The SDK's task events (subagents' progress, background agents finishing).
+---@private
+---@param msg table system message
+---@return boolean handled
+function Session:on_task_event(msg)
+  local transcript = self.chat.transcript
+  local id = msg.tool_use_id or (msg.task_id and self.tasks[msg.task_id])
+  if msg.subtype == "task_started" and msg.tool_use_id then
+    self.tasks[msg.task_id] = msg.tool_use_id
+    local sub = self:subagent(msg.tool_use_id)
+    sub.description, sub.kind = msg.description, msg.subagent_type
+    sub.background = msg.is_backgrounded or sub.background
+    transcript:subagent(msg.tool_use_id, sub)
+  elseif msg.subtype == "task_progress" and id then
+    local sub = self:subagent(id)
+    sub.activity = msg.description ~= sub.description and msg.description or sub.activity
+    sub.usage = msg.usage or sub.usage
+    transcript:subagent(id, sub)
+  elseif msg.subtype == "task_notification" and id then
+    local sub = self:subagent(id)
+    sub.status = msg.status or "completed"
+    sub.usage = msg.usage or sub.usage
+    if sub.background then
+      -- Its call returned long ago; finish its line now, and say so where you're reading.
+      transcript:tool_result(id, sub.status == "completed" and "success" or (sub.status == "failed" and "error" or "cancelled"), sub.report or msg.summary)
+      local label = sub.description or sub.kind or "Background agent"
+      self:note(("%s Background agent “%s” %s"):format(require("claude-code.ui.icons").tool("Agent"), label, sub.status))
+    end
+  elseif msg.subtype == "background_tasks_changed" then
+    local running = #vim.tbl_filter(function(t)
+      return not t.ambient
+    end, msg.tasks or {})
+    self.chat:set_status({ activity = self.chat:activity(), background = running })
+  elseif msg.subtype ~= "task_updated" then
+    return false
+  end
+  return true
+end
+
+--- A note in the transcript; held until the current turn ends so it doesn't split a reply.
+---@private
+---@param text string
+function Session:note(text)
+  if self.busy then
+    table.insert(self.notes, text)
+  else
+    self.chat.transcript:note(text)
   end
 end
 
@@ -574,6 +720,10 @@ function Session:finish_turn(msg)
     table.insert(parts, ("$%.4f"):format(turn_cost))
   end
   transcript:footer(table.concat(parts, " · "), hl)
+  for _, note in ipairs(self.notes) do
+    transcript:note(note)
+  end
+  self.notes = {}
 
   self.busy = false
   self.interrupted = false
@@ -639,7 +789,7 @@ function Session:replay(messages, total)
   for _, m in ipairs(messages) do
     local content = type(m.message) == "table" and m.message.content
     if m.parent_tool_use_id then
-      -- Subagent traffic: skipped, as in live sessions.
+      self:on_subagent_message(m)
     elseif m.type == "user" then
       local texts = {}
       if type(content) == "string" then

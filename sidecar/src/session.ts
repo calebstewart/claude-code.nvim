@@ -100,6 +100,7 @@ const canUseTool: CanUseTool = (toolName, input, options) =>
       has_suggestions: (options.suggestions?.length ?? 0) > 0,
       default_to_no: options.defaultToNo ?? false,
       suppress_always: options.suppressAlwaysAllowRule ?? false,
+      agent_id: options.agentID,
     });
   });
 

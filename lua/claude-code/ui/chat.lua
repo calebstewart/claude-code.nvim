@@ -58,6 +58,7 @@ end
 ---@field cost? number Session cost in USD.
 ---@field stopped? "suspended"|"ended"|false Not running: suspended while idle, or exited.
 ---@field mode? string Permission mode.
+---@field background? integer Background agents still running.
 
 ---@class claude_code.ChatOpts
 ---@field id integer
@@ -594,6 +595,9 @@ function Chat:render_status()
   end
 
   local info = {}
+  if s.background and s.background > 0 then
+    table.insert(info, ("%s %d agent%s running"):format(icons.tool("Agent"), s.background, s.background == 1 and "" or "s"))
+  end
   if s.model then
     table.insert(info, s.model)
   end
