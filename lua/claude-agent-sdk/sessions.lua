@@ -53,10 +53,22 @@ function M.projects_root()
 end
 
 --- The project directory Claude Code stores a working directory's sessions in.
+--- Every non-alphanumeric character becomes a dash, so a path's separators do
+--- not matter here: `C:\x\y` and `C:/x/y` encode to the same directory.
 ---@param cwd string
 ---@return string
 function M.project_dir(cwd)
   return M.projects_root() .. "/" .. (cwd:gsub("[^%w]", "-"))
+end
+
+--- A path in a form that two spellings of one location compare equal in.
+--- Needed on Windows, where `git` reports forward slashes (`C:/x/y`) while
+--- Neovim's cwd uses backslashes (`C:\x\y`): comparing the raw strings would
+--- treat a single location as two.
+---@param path string
+---@return string
+local function same_path(path)
+  return (path:gsub("\\", "/"):gsub("/+$", ""))
 end
 
 ---@param value any
@@ -234,7 +246,7 @@ local function worktrees(dir)
   local paths = {}
   for line in (result.stdout or ""):gmatch("[^\n]+") do
     local path = line:match("^worktree (.+)$")
-    if path and path ~= dir then
+    if path and same_path(path) ~= same_path(dir) then
       table.insert(paths, path)
     end
   end
@@ -246,10 +258,20 @@ end
 ---@return { dir: string, cwd?: string }[]
 local function search_roots(opts)
   if opts.dir then
-    local roots = { { dir = M.project_dir(opts.dir), cwd = opts.dir } }
+    -- Distinct paths can still encode to one project directory; scanning it
+    -- twice would report every session in it twice.
+    local roots, seen = {}, {}
+    local function add(dir, cwd)
+      local encoded = M.project_dir(dir)
+      if not seen[encoded] then
+        seen[encoded] = true
+        table.insert(roots, { dir = encoded, cwd = cwd })
+      end
+    end
+    add(opts.dir, opts.dir)
     if opts.include_worktrees ~= false then
       for _, tree in ipairs(worktrees(opts.dir)) do
-        table.insert(roots, { dir = M.project_dir(tree), cwd = tree })
+        add(tree, tree)
       end
     end
     return roots
@@ -445,7 +467,8 @@ function M.rename_session(session_id, title, opts)
   if not path then
     return false, "session not found: " .. session_id
   end
-  local file, err = io.open(path, "a")
+  -- Binary mode: in text mode Windows writes CRLF into an LF-only transcript.
+  local file, err = io.open(path, "ab")
   if not file then
     return false, tostring(err)
   end
