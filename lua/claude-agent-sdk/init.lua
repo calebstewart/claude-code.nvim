@@ -132,7 +132,9 @@ function M.query(opts)
 end
 
 --- Exposed for tests and for callers that want to inspect the spawn.
-M.build_argv = function(opts)
+---@param opts? claude_agent_sdk.Options
+---@return string[]
+function M.build_argv(opts)
   return require("claude-agent-sdk.options").build_argv(opts or {})
 end
 
