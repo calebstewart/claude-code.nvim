@@ -183,6 +183,10 @@ function Chat:visible()
   return self:windows().transcript ~= nil
 end
 
+--- The chat's windows are stacked, and the row between them is drawn either as
+--- a statusline or as a window separator depending on 'laststatus'. Both are
+--- hidden so the pane reads as one surface; only the edge against the rest of
+--- the editor stays visible.
 ---@param win integer
 local function plain_window(win)
   -- Local to the chat's buffer in this window, so a window handed back after
@@ -191,10 +195,18 @@ local function plain_window(win)
   wo.number, wo.relativenumber, wo.cursorline = false, false, false
   wo.signcolumn, wo.foldcolumn, wo.spell = "no", "0", false
   wo.wrap, wo.linebreak = true, true
-  wo.fillchars = "eob: "
+  -- With laststatus=3 there is no statusline to occupy the row between the
+  -- transcript and the prompt, so Neovim draws a separator there instead.
+  -- Blanking `horiz` erases the rule, and keeping the junctions as the plain
+  -- vertical character stops the pane's edge turning into a tee where the two
+  -- meet. A space has no foreground, so the separator highlight below only has
+  -- to get the background right.
+  local vert = (vim.opt.fillchars:get() or {}).vert or "│"
+  wo.fillchars = ("eob: ,horiz: ,horizup: ,horizdown: ,vertright:%s,vertleft:%s"):format(vert, vert)
   -- A blank statusline in the Normal color makes the bar invisible.
   wo.statusline = " "
-  wo.winhighlight = "StatusLine:ClaudeCodeBar,StatusLineNC:ClaudeCodeBar"
+  wo.winhighlight =
+    "StatusLine:ClaudeCodeBar,StatusLineNC:ClaudeCodeBar,WinSeparator:ClaudeCodeSeparator"
 end
 
 --- Current width (side layouts) or height (top/bottom) of the pane, to carry

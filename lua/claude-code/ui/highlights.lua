@@ -88,6 +88,9 @@ local function apply()
     ClaudeCodePromptAttention = { fg = warn, bold = true },
     ClaudeCodePlaceholder = { fg = muted, italic = true },
     ClaudeCodeBar = { link = "Normal" },
+    -- The separator between the chat's own windows, kept on Normal's background
+    -- so the rule vanishes while the pane's edge keeps the theme's colour.
+    ClaudeCodeSeparator = { fg = color("WinSeparator", "fg"), bg = bg },
     ClaudeCodeWelcomeLogo = { fg = claude, bold = true },
     -- Permission modes (shown in the prompt border)
     ClaudeCodeModeAcceptEdits = { fg = accent("Constant", 0xc678dd), bold = true },
