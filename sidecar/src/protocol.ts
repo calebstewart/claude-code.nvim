@@ -17,6 +17,8 @@ export interface InitRequest {
   session_id?: string;
   /** Title for a new session. */
   title?: string;
+  /** Ask for a predicted next prompt after each turn (a `prompt_suggestion` message). */
+  prompt_suggestions?: boolean;
 }
 
 export interface PromptRequest {

@@ -236,8 +236,9 @@ end
 
 ---@param buf integer Prompt buffer.
 ---@param get_commands fun(): claude_code.SlashCommand[]
+---@param on_tab? fun(): boolean <Tab> when the list isn't open; return true if handled.
 ---@return claude_code.SlashMenu
-function M.attach(buf, get_commands)
+function M.attach(buf, get_commands, on_tab)
   local self = setmetatable({ buf = buf, get_commands = get_commands, items = {}, index = 1 }, Menu)
 
   local cmp_quieted = false
@@ -278,6 +279,8 @@ function M.attach(buf, get_commands)
     vim.keymap.set("i", lhs, function()
       if self:open() then
         fn()
+      elseif lhs == "<Tab>" and on_tab and on_tab() then
+        return
       else
         api.nvim_feedkeys(api.nvim_replace_termcodes(lhs, true, false, true), "n", false)
       end

@@ -111,6 +111,7 @@ Defaults:
     respond = true,          -- Claude responds once the command exits (false: output is just context)
     max_output = 30000,      -- characters of output given to Claude
   },
+  prompt_suggestions = true, -- suggest a next prompt after each turn
 }
 ```
 
@@ -124,6 +125,9 @@ doing, the model and the session cost.
 
 - `<Up>`/`<Down>` on the first/last line of the prompt step through earlier prompts for this project, including
   ones typed in the Claude Code CLI. The current session's prompts come first.
+- After a turn, Claude Code may suggest what you'd send next; it shows in the empty prompt, and `<Tab>` takes it
+  (to send as is or edit). Typing anything else ignores it. Not offered on a session's first turn or in plan
+  mode; `prompt_suggestions = false` (or `promptSuggestionEnabled: false` in Claude Code's settings) turns it off.
 - In the transcript, `i`/`a`/`o` jump to the prompt, `<Tab>`/`<CR>` on a tool call expand its output (or an
   edit's diff), and `q` hides the chat.
 - `:q` in any of the chat's windows closes the whole sidebar; the session keeps running.

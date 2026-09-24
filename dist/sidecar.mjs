@@ -36696,6 +36696,7 @@ async function run(init) {
       // Without this the SDK runs with an empty system prompt, not Claude Code's.
       systemPrompt: { type: "preset", preset: "claude_code" },
       includePartialMessages: true,
+      promptSuggestions: init.prompt_suggestions ?? true,
       canUseTool
     }
   });

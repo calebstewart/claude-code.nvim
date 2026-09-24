@@ -190,6 +190,7 @@ function Session:start()
     resume = self.persisted and self.id or nil,
     session_id = not self.persisted and self.id or nil,
     title = not self.persisted and self.title or nil,
+    prompt_suggestions = config.options.prompt_suggestions,
   })
 end
 
@@ -346,6 +347,7 @@ function Session:send(text, attachments)
   end
   self:ensure_running()
   self.last_active = os.time()
+  self.chat.prompt:suggest(nil)
   self.chat.transcript:user_message(text, shown)
   self.busy = true
   self.in_reply = false
@@ -548,6 +550,12 @@ function Session:on_sdk_message(msg)
     end
   elseif msg.type == "user" then
     self:tool_results(msg.message and msg.message.content, msg.tool_use_result)
+  elseif msg.type == "prompt_suggestion" then
+    -- A predicted next prompt, after the turn; shown until you type or send.
+    if not self.busy then
+      self.chat.prompt:suggest(msg.suggestion)
+      self.chat:refresh_status()
+    end
   elseif msg.type == "result" then
     if (msg.num_turns or 0) == 0 and self.silent_results > 0 then
       self.silent_results = self.silent_results - 1

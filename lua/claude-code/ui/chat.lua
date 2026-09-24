@@ -106,6 +106,9 @@ function Chat.new(opts)
   end, opts.session_id)
   self.slash = require("claude-code.ui.slash").attach(self.prompt.buf, function()
     return opts.commands and opts.commands() or {}
+  end, function()
+    -- <Tab> in an empty prompt takes the suggested next prompt.
+    return self.prompt:accept_suggestion()
   end)
   prompts[self.prompt.buf] = self
   install_paste_hook()
@@ -529,6 +532,11 @@ function Chat:apply_keymaps()
   end
 end
 
+--- Redraw the prompt's border (e.g. after the hints changed).
+function Chat:refresh_status()
+  self:render_status()
+end
+
 --- The activity currently shown (so callers can update other fields without clearing it).
 ---@return string?
 function Chat:activity()
@@ -620,6 +628,9 @@ function Chat:render_status()
   local submit = config.keys(keys.submit.i)[1]
   if submit then
     table.insert(hints, icons.key(submit) .. " send")
+  end
+  if self.prompt:has_suggestion() then
+    table.insert(hints, "⇥ suggestion")
   end
   table.insert(hints, "↑↓ history")
   if keys.interrupt and s.activity then

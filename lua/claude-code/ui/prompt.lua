@@ -15,6 +15,8 @@ local attach_ns = api.nvim_create_namespace("claude-code.prompt.attachments")
 ---@field private draft? string The fresh prompt, kept while browsing history.
 ---@field private attachments { label: string, image: claude_code.Image }[] Images for the next send.
 ---@field private image_count integer Numbers `[Image #N]`; keeps counting across sends.
+---@field private suggestion? string Predicted next prompt, shown while the prompt is empty.
+---@field private placeholder_text? string What the placeholder currently shows.
 local Prompt = {}
 Prompt.__index = Prompt
 
@@ -60,6 +62,40 @@ function Prompt:clear()
   self.history, self.history_index, self.draft = nil, nil, nil
   self.attachments = {}
   self:update_placeholder()
+end
+
+--- Set (or clear) the suggested next prompt.
+---@param text? string
+function Prompt:suggest(text)
+  text = text and vim.trim(text) or nil
+  self.suggestion = text ~= "" and text or nil
+  self:update_placeholder()
+end
+
+--- A suggestion is showing (the prompt is empty and there is one).
+function Prompt:has_suggestion()
+  return self.suggestion ~= nil and self:empty()
+end
+
+--- Put the suggestion in the prompt to send or edit.
+---@return boolean taken
+function Prompt:accept_suggestion()
+  if not self:has_suggestion() then
+    return false
+  end
+  local lines = vim.split(self.suggestion, "\n", { plain = true })
+  api.nvim_buf_set_lines(self.buf, 0, -1, false, lines)
+  local win = vim.fn.bufwinid(self.buf)
+  if win ~= -1 then
+    api.nvim_win_set_cursor(win, { #lines, #lines[#lines] })
+  end
+  self:update_placeholder()
+  return true
+end
+
+---@private
+function Prompt:empty()
+  return api.nvim_buf_line_count(self.buf) == 1 and api.nvim_buf_get_lines(self.buf, 0, 1, false)[1] == ""
 end
 
 --- Attach an image: insert its `[Image #N]` placeholder at the cursor.
@@ -156,15 +192,20 @@ end
 
 ---@private
 function Prompt:update_placeholder()
-  local empty = api.nvim_buf_line_count(self.buf) == 1 and api.nvim_buf_get_lines(self.buf, 0, 1, false)[1] == ""
-  if empty and not self.placeholder then
-    self.placeholder = api.nvim_buf_set_extmark(self.buf, ns, 0, 0, {
-      virt_text = { { "Ask Claude anything…", "ClaudeCodePlaceholder" } },
-      virt_text_pos = "overlay",
-    })
-  elseif not empty and self.placeholder then
+  local text = self:empty() and (self.suggestion and self.suggestion:gsub("\n.*", " …") or "Ask Claude anything…") or nil
+  if text == self.placeholder_text then
+    return
+  end
+  if self.placeholder then
     api.nvim_buf_del_extmark(self.buf, ns, self.placeholder)
     self.placeholder = nil
+  end
+  self.placeholder_text = text
+  if text then
+    self.placeholder = api.nvim_buf_set_extmark(self.buf, ns, 0, 0, {
+      virt_text = { { text, "ClaudeCodePlaceholder" } },
+      virt_text_pos = "overlay",
+    })
   end
 end
 
