@@ -17,6 +17,10 @@ local M = {}
 ---@field sessions { idle_timeout: integer|false } Minutes before an idle background session's process is stopped (it resumes on demand).
 ---@field shell { respond: boolean, max_output: integer } `!command` prompts: whether Claude responds once the command exits, and how much output (characters) it's given.
 ---@field prompt_suggestions boolean After each turn, suggest a next prompt (shown in the empty prompt; <Tab> takes it).
+---@field messaging claude_code.MessagingConfig Messages between Claude sessions.
+
+---@class claude_code.MessagingConfig
+---@field inbound? "accept"|"hold"|"refuse" What sessions do with messages from your other Claude sessions (Claude Code's `crossSessionInbound`); nil uses your Claude Code settings.
 
 ---@class claude_code.WindowConfig
 ---@field position "right"|"left"|"top"|"bottom"
@@ -61,6 +65,7 @@ M.defaults = {
   sessions = { idle_timeout = 15 },
   shell = { respond = true, max_output = 30000 },
   prompt_suggestions = true,
+  messaging = { inbound = nil },
 }
 
 ---@type claude_code.Config

@@ -22,6 +22,7 @@ after `image`, and mode names after `mode`.
 | `:Claude next` / `:Claude prev` | Cycle through the sessions open in this Neovim |
 | `:Claude mode [mode]` | Set the current session's permission mode (pick from a list if none is given) |
 | `:Claude image <path>` | Attach an image file to the prompt |
+| `:Claude deliver` | Deliver the [held messages](@/sessions.md#held-messages) from other sessions to the current session's Claude |
 | `:Claude stop` | End the current session and close it (resume it later from the picker) |
 
 ## Lua API
@@ -43,6 +44,7 @@ need arguments or conditions.
 | `rename(name?)` | Rename the current session. With no name, asks for one |
 | `mode(mode?)` | Set the permission mode. With no mode, pick one from a list |
 | `image(path)` | Attach an image file to the prompt, opening the chat if needed |
+| `deliver()` | Deliver the current session's held messages from other sessions |
 | `next()` / `prev()` | Switch to the next or previous session open in this Neovim |
 
 ```lua

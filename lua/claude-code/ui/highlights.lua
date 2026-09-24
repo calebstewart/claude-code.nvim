@@ -40,6 +40,7 @@ local function apply()
   local fg = color("Normal", "fg") or (vim.o.background == "light" and 0x000000 or 0xffffff)
   local user = accent("Function", 0x61afef)
   local claude = accent("Special", 0xd19a66)
+  local peer = accent("String", 0x98c379)
   local ok = accent("DiagnosticOk", 0x98c379)
   local err = accent("DiagnosticError", 0xe06c75)
   local warn = accent("DiagnosticWarn", 0xe5c07b)
@@ -52,10 +53,15 @@ local function apply()
     ClaudeCodeAssistantPill = { fg = bg, bg = claude, bold = true },
     ClaudeCodeUserPillEdge = { fg = user },
     ClaudeCodeAssistantPillEdge = { fg = claude },
+    ClaudeCodePeerPill = { fg = bg, bg = peer, bold = true },
+    ClaudeCodePeerPillEdge = { fg = peer },
     ClaudeCodeRule = { fg = blend(fg, bg, 0.15) },
     -- User messages
     ClaudeCodeUserBlock = { bg = blend(user, bg, 0.10) },
     ClaudeCodeUserBar = { fg = user, bg = blend(user, bg, 0.10) },
+    -- Messages from other Claude sessions
+    ClaudeCodePeerBlock = { bg = blend(peer, bg, 0.10) },
+    ClaudeCodePeerBar = { fg = peer, bg = blend(peer, bg, 0.10) },
     -- Tools
     ClaudeCodeToolName = { fg = fg, bold = true },
     ClaudeCodeToolDetail = { fg = muted },

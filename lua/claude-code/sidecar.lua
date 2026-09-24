@@ -12,6 +12,8 @@ local config = require("claude-code.config")
 ---@field resume? string
 ---@field session_id? string Id for a new session.
 ---@field title? string Title for a new session.
+---@field name? string Name other Claude sessions use to message this one.
+---@field inbound? "accept"|"hold"|"refuse" What to do with messages from other sessions; nil uses Claude Code's settings.
 ---@field prompt_suggestions? boolean Ask for a predicted next prompt after each turn.
 
 ---@class claude_code.SidecarEvent

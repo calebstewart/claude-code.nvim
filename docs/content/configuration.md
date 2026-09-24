@@ -44,6 +44,10 @@ the defaults with `vim.tbl_deep_extend("force", …)`, so a partial table only o
     max_output = 30000,      -- characters of output given to Claude
   },
   prompt_suggestions = true, -- suggest a next prompt after each turn
+  messaging = {
+    inbound = nil,           -- messages from your other Claude sessions: "accept" | "hold" | "refuse";
+                             -- nil uses Claude Code's settings (`crossSessionInbound`)
+  },
 }
 ```
 
@@ -176,6 +180,25 @@ per-Neovim and the CLI never sees it.
 
 `integer | false`, default `15`. Minutes a background session may sit idle before its process is stopped.
 Switching back to it, or sending to it, resumes it from disk with nothing lost. `false` never stops them.
+
+Two kinds of session are left running regardless, because a stopped session can't receive
+[messages from other sessions](@/sessions.md#messages-between-sessions): one that has sent or received such a
+message, and one holding messages for you to deliver.
+
+## Messaging
+
+### messaging.inbound
+
+`"accept" | "hold" | "refuse" | nil`, default `nil`. What sessions started here do with messages from your
+other Claude sessions, passed to Claude Code as its
+[`crossSessionInbound`](https://code.claude.com/docs/en/cross-session-messaging#control-inbound-messages)
+setting. `nil` leaves it to your Claude Code settings, whose default delivers messages unless the two sessions
+differ in whether they bypass permission prompts, in which case they're held.
+
+- `"accept"` delivers every message.
+- `"hold"` holds each one until you [deliver it](@/sessions.md#held-messages). Held this way, a message
+  doesn't expire.
+- `"refuse"` drops them, and the sender is told.
 
 ## Shell
 

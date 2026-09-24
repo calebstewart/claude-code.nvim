@@ -104,8 +104,19 @@ const canUseTool: CanUseTool = (toolName, input, options) =>
     });
   });
 
+/** Accepting releases every held message at once; null then restores whatever applied before. */
+async function deliverHeld(): Promise<void> {
+  if (!session) return;
+  await session.applyFlagSettings({ crossSessionInbound: "accept" });
+  await session.applyFlagSettings({ crossSessionInbound: initRequest?.inbound ?? null });
+}
+
+let sessionId: string | undefined;
+let initRequest: InitRequest | undefined;
+
 async function run(init: InitRequest): Promise<void> {
-  const sessionId = init.resume ?? init.session_id ?? randomUUID();
+  initRequest = init;
+  sessionId = init.resume ?? init.session_id ?? randomUUID();
   session = query({
     prompt: inbox,
     options: {
@@ -123,6 +134,18 @@ async function run(init: InitRequest): Promise<void> {
       includePartialMessages: true,
       promptSuggestions: init.prompt_suggestions ?? true,
       canUseTool,
+      settings: init.inbound ? { crossSessionInbound: init.inbound } : undefined,
+      extraArgs: {
+        // Echo user messages back: how a message from another session (which starts or joins
+        // a turn without a prompt from us) reaches the transcript.
+        "replay-user-messages": null,
+        ...(init.name ? { name: init.name } : {}),
+      },
+      env: {
+        ...process.env,
+        // system/session_state_changed: running and idle, whatever started the turn.
+        CLAUDE_CODE_EMIT_SESSION_STATE_EVENTS: "1",
+      },
     },
   });
   send({ type: "ready", session_id: sessionId });
@@ -164,6 +187,20 @@ function handle(request: Inbound): void {
     case "interrupt":
       session?.interrupt().catch((err: unknown) => {
         send({ type: "error", message: `Interrupt failed: ${String(err)}` });
+      });
+      return;
+    case "rename":
+      // Not in the SDK's typings, but on Query since 0.3: the control request the CLI's
+      // /rename makes, which also updates the name in the cross-session registry.
+      (session as unknown as { renameSession(title: string, sessionId?: string): Promise<void> } | undefined)
+        ?.renameSession(request.title, sessionId)
+        .catch((err: unknown) => {
+          send({ type: "error", message: `Rename failed: ${String(err)}` });
+        });
+      return;
+    case "deliver_held":
+      deliverHeld().catch((err: unknown) => {
+        send({ type: "error", message: `Couldn't deliver held messages: ${String(err)}` });
       });
       return;
     case "permission_response": {

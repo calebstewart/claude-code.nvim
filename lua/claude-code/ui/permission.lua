@@ -6,6 +6,7 @@
 -- the questions and answers by allowing the tool with `answers` filled into its input.
 
 local api = vim.api
+local card = require("claude-code.ui.card")
 local icons = require("claude-code.ui.icons")
 local QuestionPicker = require("claude-code.ui.question")
 local tools = require("claude-code.ui.tools")
@@ -117,75 +118,7 @@ end
 
 -- Card drawing ---------------------------------------------------------------
 
---- Word-wrap `text` to `width` columns.
----@param text string
----@param width integer
----@return string[]
-local function wrap(text, width)
-  local rows = {}
-  for _, para in ipairs(vim.split(text, "\n", { plain = true })) do
-    local line = ""
-    for word in para:gmatch("%S+") do
-      if line == "" then
-        line = word
-      elseif vim.fn.strdisplaywidth(line .. " " .. word) <= width then
-        line = line .. " " .. word
-      else
-        table.insert(rows, line)
-        line = word
-      end
-    end
-    table.insert(rows, line)
-  end
-  return rows
-end
-
---- A bordered card: a heading in the top edge, then rows of chunks, each
---- padded (or clipped) to the card's inner width.
----@param width integer Window width.
----@param heading string
----@param rows claude_code.Chunk[][]
----@return claude_code.VirtLine[]
-local function frame(width, heading, rows)
-  local inner = math.max(width - 6, 20)
-  local lines = {
-    {
-      { "  ", "Normal" },
-      { "╭─ ", "ClaudeCodeCardBorder" },
-      { heading .. " ", "ClaudeCodeCardTitle" },
-      { string.rep("─", math.max(inner - vim.fn.strdisplaywidth(heading) - 1, 0)) .. "╮", "ClaudeCodeCardBorder" },
-    },
-  }
-  for _, row in ipairs(rows) do
-    local line = { { "  ", "Normal" }, { "│ ", "ClaudeCodeCardBorder" } }
-    local used = 0
-    for _, chunk in ipairs(row) do
-      local text = chunk[1]:gsub("\t", "  ")
-      local room = inner - used
-      if room <= 0 then
-        break
-      end
-      if vim.fn.strdisplaywidth(text) > room then
-        text = vim.fn.strcharpart(text, 0, room - 1) .. "…"
-      end
-      table.insert(line, { text, chunk[2] })
-      used = used + vim.fn.strdisplaywidth(text)
-    end
-    table.insert(line, { string.rep(" ", math.max(inner - used, 0)), "ClaudeCodeCardText" })
-    table.insert(line, { " │", "ClaudeCodeCardBorder" })
-    table.insert(lines, line)
-  end
-  table.insert(lines, { { "  ", "Normal" }, { "╰" .. string.rep("─", inner + 2) .. "╯", "ClaudeCodeCardBorder" } })
-  return lines
-end
-
----@param key string
----@param label string
----@param hl? string
----@return claude_code.Chunk[]
-local function choice(key, label, hl)
-  return { { " " .. key .. " ", hl or "ClaudeCodeCardKey" }, { " " .. label .. "   ", "ClaudeCodeCardText" } }
-end
+local wrap, frame, choice = card.wrap, card.frame, card.choice
 
 ---@param request claude_code.PermissionRequest
 local function offers_always(request)
@@ -196,7 +129,7 @@ end
 ---@param width integer
 ---@return claude_code.VirtLine[]
 local function permission_card(request, width)
-  local inner = math.max(width - 6, 20)
+  local inner = card.inner(width)
   local rows = {} ---@type claude_code.Chunk[][]
   if request.subagent then
     table.insert(rows, { { icons.tool("Agent") .. " Subagent: " .. request.subagent, "ClaudeCodeMuted" } })

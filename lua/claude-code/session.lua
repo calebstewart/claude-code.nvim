@@ -4,6 +4,7 @@
 -- automatically when it's needed.
 
 local Chat = require("claude-code.ui.chat")
+local Held = require("claude-code.ui.held")
 local Permissions = require("claude-code.ui.permission")
 local config = require("claude-code.config")
 local control = require("claude-code.control")
@@ -14,6 +15,7 @@ local transport = require("claude-code.transport")
 ---@class claude_code.Session
 ---@field id string Claude session id (chosen up front for new sessions).
 ---@field title? string Custom title, or Claude Code's summary.
+---@field private named boolean `title` was chosen (not Claude Code's summary): it's also the name other sessions message this one by.
 ---@field cwd string
 ---@field chat claude_code.Chat
 ---@field busy boolean A turn is in progress.
@@ -34,6 +36,8 @@ local transport = require("claude-code.transport")
 ---@field private persisted boolean Its transcript exists on disk (so it can be resumed).
 ---@field private sidecar? claude_code.Sidecar|claude_code.Cli The session transport (see claude-code/transport.lua).
 ---@field private permissions claude_code.Permissions
+---@field private held claude_code.Held Messages from other sessions awaiting delivery.
+---@field private messaging boolean Has messaged, or been messaged by, another session: kept running while idle so replies reach it.
 ---@field private suspending boolean
 ---@field private pending_title? string Rename to apply once the transcript exists.
 ---@field private in_reply boolean The current turn already has a "Claude" header.
@@ -58,6 +62,73 @@ local function uuid()
   )
 end
 
+--- Text of a user message's content (a string or text blocks).
+---@param content any
+---@return string
+local function content_text(content)
+  if type(content) == "string" then
+    return content
+  end
+  local parts = {}
+  for _, block in ipairs(type(content) == "table" and content or {}) do
+    if block.type == "text" and type(block.text) == "string" then
+      table.insert(parts, block.text)
+    end
+  end
+  return table.concat(parts, "\n")
+end
+
+local ENTITIES = { lt = "<", gt = ">", quot = '"', apos = "'", amp = "&" }
+
+---@param text string
+local function unescape(text)
+  return (text:gsub("&(%a+);", function(name)
+    return ENTITIES[name]
+  end):gsub("&#(%d+);", function(code)
+    return vim.fn.nr2char(tonumber(code))
+  end))
+end
+
+---@class claude_code.PeerMessage
+---@field from string Name of the sending session (or its address when it gave none).
+---@field body string
+
+--- A message from another Claude session, as Claude Code wraps it for the model:
+--- `<cross-session-message from="…" from-name="…">body</cross-session-message>`.
+---@param text string
+---@return claude_code.PeerMessage?
+local function parse_peer_message(text)
+  local attrs, body = text:match("<cross%-session%-message(.-)>(.-)</cross%-session%-message>")
+  if not attrs then
+    return nil
+  end
+  local from = attrs:match('from%-name="(.-)"') or attrs:match('from="(.-)"') or "another session"
+  return { from = unescape(from), body = unescape(vim.trim(body)) }
+end
+
+--- The peer message a replayed user message carries, if it's one. Claude Code
+--- describes it in `origin`; the envelope in the text is the fallback.
+---@param msg table SDKUserMessageReplay
+---@return claude_code.PeerMessage?
+local function replayed_peer_message(msg)
+  local origin = type(msg.origin) == "table" and msg.origin or {}
+  local parsed = parse_peer_message(content_text(msg.message and msg.message.content))
+  if origin.kind ~= "peer" and not parsed then
+    return nil
+  end
+  local from = origin.name or (parsed and parsed.from) or origin.from or "another session"
+  local body = origin.body or (parsed and parsed.body) or ""
+  return { from = from, body = body }
+end
+
+--- What happened to a held message that was dropped (peer_message_hold's `outcome`).
+local DROPPED = {
+  expired = "expired before it was delivered",
+  refused = "was refused",
+  dropped = "was dropped",
+  discarded = "was discarded",
+}
+
 ---@class claude_code.SessionOpts
 ---@field title? string Name for a new session.
 ---@field info? table SDKSessionInfo of a stored session to resume.
@@ -77,6 +148,8 @@ function Session.new(opts)
   local self = setmetatable({
     id = info and info.sessionId or uuid(),
     title = info and (info.customTitle or info.summary) or opts.title,
+    named = (info and info.customTitle or opts.title) ~= nil,
+    messaging = false,
     cwd = info and info.cwd or opts.cwd or vim.fn.getcwd(),
     persisted = info ~= nil,
     busy = false,
@@ -136,6 +209,12 @@ function Session.new(opts)
     vim.notify(("Claude needs your input in “%s”"):format(self.title or "New session"), vim.log.levels.WARN)
   end)
 
+  self.held = Held.new(self.chat, function()
+    if self:running() then
+      self.sidecar:send({ type = "deliver_held" })
+    end
+  end)
+
   if info then
     self.chat:set_status({ activity = "Loading" })
     self:load_history()
@@ -188,6 +267,7 @@ function Session:start()
       self.sidecar = nil
       self.busy = false
       self.permissions:clear()
+      self.held:clear()
       self.chat:set_status({ activity = nil, stopped = self.suspending and "suspended" or "ended" })
       if code ~= 0 and not self.suspending then
         vim.notify(("claude-code: sidecar exited with code %d\n%s"):format(code, stderr), vim.log.levels.ERROR)
@@ -207,6 +287,8 @@ function Session:start()
     resume = self.persisted and self.id or nil,
     session_id = not self.persisted and self.id or nil,
     title = not self.persisted and self.title or nil,
+    name = self.named and self.title or nil,
+    inbound = config.options.messaging.inbound,
     prompt_suggestions = config.options.prompt_suggestions,
   })
 end
@@ -219,8 +301,11 @@ function Session:ensure_running()
 end
 
 --- Stop the process while idle; the conversation stays and resumes on demand.
+--- Not while messages from other sessions wait on you (they'd be lost), nor once
+--- it's been talking to another session: a stopped session can't be messaged.
 function Session:suspend()
-  if self:running() and not self.busy and not self:needs_attention() then
+  local keep = self.busy or self:needs_attention() or self.held:count() > 0 or self.messaging
+  if self:running() and not keep then
     self.suspending = true
     self.sidecar:stop()
   end
@@ -438,12 +523,20 @@ end
 ---@param title string
 function Session:rename(title)
   self.title = title
+  self.named = true
   self.chat:set_title(title)
   if not self.persisted then
     -- No transcript to write the title to yet; apply it after the first turn.
     self.pending_title = title
     return
   end
+  if self:running() then
+    -- Through the process itself, as the CLI's /rename does: it records the title and
+    -- also renames the session for messaging, so other sessions reach it by the new name.
+    self.sidecar:send({ type = "rename", title = title })
+    return
+  end
+  -- Not running: record the title; it becomes the session's name (--name) when it starts.
   control.request("rename_session", { session_id = self.id, title = title, dir = self.cwd }, function(err)
     if err then
       vim.notify("claude-code: rename failed: " .. err, vim.log.levels.ERROR)
@@ -508,6 +601,32 @@ function Session:on_sdk_message(msg)
   if msg.type == "system" and self:on_task_event(msg) then
     return
   end
+  if msg.type == "system" and msg.subtype == "session_state_changed" then
+    -- Claude Code's own account of whether a turn is running, whatever started it.
+    if msg.state == "running" then
+      self:begin_turn()
+    elseif msg.state == "idle" then
+      self:settle()
+    end
+    return
+  elseif msg.type == "command_lifecycle" then
+    -- A queued message (e.g. from another session) starting; for CLIs without the above.
+    if msg.state == "started" then
+      self:begin_turn()
+    end
+    return
+  elseif msg.type == "system" and msg.subtype == "peer_message_hold" then
+    self:on_peer_hold(msg)
+    return
+  elseif msg.type == "system" and msg.subtype == "informational" then
+    self:on_informational(msg)
+    return
+  end
+  if not self.busy and (msg.type == "stream_event" or msg.type == "assistant") then
+    -- Claude is answering something we didn't send, and Claude Code didn't pass through
+    -- idle first (e.g. a delivery notice queued behind the last turn): it's a new turn.
+    self:begin_turn()
+  end
 
   if msg.type == "system" and (msg.subtype == "init" or msg.subtype == "status") and msg.permissionMode then
     -- Claude Code reports the mode each turn, and when it changes (e.g. leaving plan mode).
@@ -563,7 +682,17 @@ function Session:on_sdk_message(msg)
         self:reply()
         transcript:tool_use(block.id, block.name, block.input or {})
         self:activity("Running " .. block.name)
+        if block.name == "SendMessage" then
+          self.messaging = true
+        end
       end
+    end
+  elseif msg.type == "user" and msg.isReplay then
+    -- User messages echoed back (--replay-user-messages). Ours are shown already;
+    -- one from another session arrives only this way.
+    local peer = replayed_peer_message(msg)
+    if peer then
+      self:peer_message(msg.uuid or tostring(vim.uv.hrtime()), peer)
     end
   elseif msg.type == "user" then
     self:tool_results(msg.message and msg.message.content, msg.tool_use_result)
@@ -724,6 +853,106 @@ function Session:note(text)
   end
 end
 
+--- A turn we didn't start (a message from another session, a background task
+--- finishing): track it like one of ours, so the status shows it and it can be
+--- interrupted. A no-op for our own turns, which are already busy.
+---@private
+function Session:begin_turn()
+  if self.busy then
+    return
+  end
+  self.busy = true
+  self.in_reply = false
+  self.reply_has_text = false
+  self.interrupted = false
+  self.last_active = os.time()
+  self.chat.prompt:suggest(nil)
+  self.chat:set_status({ activity = "Thinking" })
+end
+
+--- Claude Code went idle: nothing running or queued. A turn's result normally ended
+--- it already; this ends the ones that don't produce a result we count (a context-only
+--- message still reports "running" first).
+---@private
+function Session:settle()
+  if not self.busy then
+    return
+  end
+  self.busy = false
+  self.interrupted = false
+  for _, note in ipairs(self.notes) do
+    self.chat.transcript:note(note)
+  end
+  self.notes = {}
+  self.chat:set_status({ activity = nil })
+end
+
+--- A message from another session reached Claude.
+---@private
+---@param id string
+---@param peer claude_code.PeerMessage
+function Session:peer_message(id, peer)
+  self.messaging = true
+  self.chat.transcript:peer_message(id, peer.from, peer.body)
+  -- Claude's answer gets its own header below it.
+  self.in_reply, self.reply_has_text = false, false
+  if not self.chat:visible() then
+    local preview = peer.body:gsub("\n.*", " …")
+    local title = self.title or "New session"
+    vim.notify(("claude-code: “%s” got a message from %s: %s"):format(title, peer.from, preview))
+  end
+end
+
+--- A message from another session was held back, then released or dropped.
+---@private
+---@param msg table system/peer_message_hold
+function Session:on_peer_hold(msg)
+  local id = msg.message_uuid
+  if not id then
+    return
+  end
+  local from = msg.from_name or (msg.from ~= "" and msg.from) or "another session"
+  if msg.state == "held" then
+    self.held:add({ uuid = id, from = from, cause = msg.cause })
+    if not self.chat:visible() then
+      vim.notify(
+        ("claude-code: a message from %s is waiting in “%s”"):format(from, self.title or "New session"),
+        vim.log.levels.WARN
+      )
+    end
+    return
+  end
+  local held = self.held:remove(id)
+  if msg.state == "dropped" and held then
+    local icon = require("claude-code.ui.icons").get().message
+    self:note(("%s Message from %s %s"):format(icon, from, DROPPED[msg.outcome] or "was dropped"))
+  end
+end
+
+--- Claude Code's notices. Shown: how messages this session sent fared (held for the
+--- recipient's approval, released, refused, the recipient going idle).
+---@private
+---@param msg table system/informational
+function Session:on_informational(msg)
+  local text = type(msg.content) == "string" and msg.content or ""
+  if not text:lower():find("cross%-session") then
+    return
+  end
+  -- The recipient is a socket path; the text around it is what matters.
+  local body = vim.trim((text:gsub("^%b[]%s*", ""):gsub("%s*%(recipient: [^)]*%)", "")))
+  if text:match("^%[") then
+    -- Worded for Claude ("[Cross-session delivery notice] … Do not wait for a reply"):
+    -- the first sentence says what happened.
+    body = body:match("^(.-%.)%s") or body
+  end
+  self:note(("%s %s"):format(require("claude-code.ui.icons").get().message, body))
+end
+
+--- Deliver the messages from other sessions that are being held for you.
+function Session:deliver_held()
+  self.held:deliver()
+end
+
 ---@private
 ---@param msg table SDKResultMessage
 function Session:finish_turn(msg)
@@ -792,8 +1021,9 @@ function Session:load_history()
       self.chat:set_status({ activity = nil, stopped = "suspended" })
       return
     end
+    local messages = require("claude-code.peer_history").merge(self.id, self.cwd, result.messages or {})
     self.chat.transcript:batch(function()
-      self:replay(result.messages or {}, result.total or 0)
+      self:replay(messages, result.total or 0)
     end)
     if self:running() then
       self.chat:set_status({ activity = nil })
@@ -813,7 +1043,11 @@ function Session:replay(messages, total)
   end
   for _, m in ipairs(messages) do
     local content = type(m.message) == "table" and m.message.content
-    if m.parent_tool_use_id then
+    if m.type == "peer" then
+      -- From another session (see peer_history.lua).
+      transcript:peer_message(m.uuid, m.from, m.body)
+      self.in_reply, self.reply_has_text = false, false
+    elseif m.parent_tool_use_id then
       self:on_subagent_message(m)
     elseif m.type == "user" then
       local texts = {}
@@ -857,6 +1091,10 @@ function Session:replay(messages, total)
         -- handled above
       elseif text:match("^%[Request interrupted by user") then
         transcript:footer("Interrupted")
+      elseif parse_peer_message(text) then
+        local peer = parse_peer_message(text) --[[@as claude_code.PeerMessage]]
+        transcript:peer_message(m.uuid or ("replayed-" .. tostring(vim.uv.hrtime())), peer.from, peer.body)
+        self.in_reply, self.reply_has_text = false, false
       elseif text ~= "" and not hidden_user_text(text) then
         transcript:user_message(text)
         self.in_reply, self.reply_has_text = false, false

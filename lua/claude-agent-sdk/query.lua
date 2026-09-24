@@ -331,10 +331,23 @@ end
 
 -- Session and workspace
 
+--- Retitle the running session (it also becomes the name other sessions message it by).
+--- `opts.source`: "host" for a rename the user made in the hosting application, which
+--- the CLI counts as a user rename; "remote" (the CLI's default) for one relayed from
+--- claude.ai. `opts.session_id`: refuse if the process has since moved to another session.
 ---@param title string
+---@param opts? { source?: "host"|"remote", session_id?: string }|fun(response?: table, err?: string)
 ---@param callback? fun(response?: table, err?: string)
-function Query:rename_session(title, callback)
-  self.control:request("rename_session", { title = title }, callback)
+function Query:rename_session(title, opts, callback)
+  if type(opts) == "function" then
+    opts, callback = nil, opts
+  end
+  opts = opts or {}
+  self.control:request(
+    "rename_session",
+    { title = title, source = opts.source, session_id = opts.session_id },
+    callback
+  )
 end
 
 ---@param path string

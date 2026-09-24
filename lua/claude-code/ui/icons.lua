@@ -19,6 +19,7 @@ local config = require("claude-code.config")
 ---@field plan string
 ---@field image string
 ---@field background string
+---@field message string A message from another Claude session.
 ---@field tools table<string, string> Tool name -> icon; `default` for anything else.
 
 ---@type table<string, claude_code.Icons>
@@ -39,6 +40,7 @@ local sets = {
     plan = "\u{f022}", -- fa-list_alt
     image = "\u{f03e}", -- fa-picture_o
     background = "\u{f1da}", -- fa-history
+    message = "\u{f0e0}", -- fa-envelope
     pill = { "\u{e0b6}", "\u{e0b4}" }, -- powerline rounded caps
     spinner = { "⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏" },
     tools = {
@@ -58,6 +60,8 @@ local sets = {
       AskUserQuestion = "\u{f128}", -- fa-question
       ExitPlanMode = "\u{f022}", -- fa-list_alt
       Shell = "\u{f489}", -- oct-terminal (a `!command` you ran)
+      SendMessage = "\u{f0e0}", -- fa-envelope
+      ListAgents = "\u{f0c0}", -- fa-users
       default = "\u{f423}", -- oct-gear
     },
   },
@@ -76,6 +80,7 @@ local sets = {
     plan = "☰",
     image = "▣",
     background = "◷",
+    message = "✉",
     pill = { "", "" },
     spinner = { "⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏" },
     tools = {
@@ -95,6 +100,8 @@ local sets = {
       AskUserQuestion = "?",
       ExitPlanMode = "☰",
       Shell = "$",
+      SendMessage = "✉",
+      ListAgents = "◈",
       default = "•",
     },
   },

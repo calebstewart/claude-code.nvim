@@ -122,15 +122,18 @@ function Transcript:new_paragraph()
   self.pending_break = false
 end
 
----@param role "user"|"assistant"
+---@param role "user"|"assistant"|"peer"
+---@param from? string For "peer": the name of the session the message is from.
 ---@return integer row First row of the turn.
-function Transcript:start_turn(role)
+function Transcript:start_turn(role, from)
   self:new_paragraph()
   local row = self:last_row()
   local i = icons.get()
   local label, kind = i.user .. " You", "User"
   if role == "assistant" then
     label, kind = i.claude .. " Claude", "Assistant"
+  elseif role == "peer" then
+    label, kind = i.message .. " " .. (from or "Another session"), "Peer"
   end
   local edge = "ClaudeCode" .. kind .. "PillEdge"
   -- Hang the header below the blank separator line rather than above the turn's first
@@ -205,6 +208,46 @@ function Transcript:user_message(text, images)
       })
     end
     api.nvim_buf_set_extmark(self.buf, ns, last, 0, { virt_lines = details })
+  end
+  self.pending_break = true
+end
+
+--- A message from another Claude session: its first line, with the rest a toggle
+--- away like tool output (the CLI shows the same one-line preview).
+---@param id string Unique per message (its uuid), for expanding it.
+---@param from string Name of the sending session.
+---@param body string
+function Transcript:peer_message(id, from, body)
+  if not self:valid() then
+    return
+  end
+  require("claude-code.ui.welcome").clear(self.buf)
+  self:start_turn("peer", from)
+  local lines = vim.split(vim.trim(body), "\n", { plain = true })
+  local row = self:last_row()
+  self:write(lines[1] ~= "" and lines[1] or "(empty message)")
+  ---@type claude_code.ToolEntry
+  local entry = { name = "PeerMessage", input = {}, status = "success", result = body, icon = 0 }
+  entry.icon = api.nvim_buf_set_extmark(self.buf, ns, row, 0, {
+    virt_text = { { "▎ ", "ClaudeCodePeerBar" } },
+    virt_text_pos = "inline",
+    line_hl_group = "ClaudeCodePeerBlock",
+    right_gravity = false,
+  })
+  if #lines > 1 then
+    local toggle = require("claude-code.config").options.keymaps.toggle_tool
+    local hint = toggle and toggle[1] and (" · %s to expand"):format(icons.key(toggle[1])) or ""
+    entry.summary = api.nvim_buf_set_extmark(self.buf, ns, row, 0, {
+      virt_lines = {
+        {
+          { "  ⎿  ", "ClaudeCodeToolGutter" },
+          { ("%d more line%s%s"):format(#lines - 1, #lines == 2 and "" or "s", hint), "ClaudeCodeMuted" },
+        },
+      },
+    })
+    self.tools[id] = entry
+    -- As after a tool call: keep the virtual lines above the last buffer line.
+    self:write("\n")
   end
   self.pending_break = true
 end

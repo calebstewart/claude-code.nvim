@@ -17,6 +17,10 @@ export interface InitRequest {
   session_id?: string;
   /** Title for a new session. */
   title?: string;
+  /** Name other Claude sessions use to message this one (`--name`). */
+  name?: string;
+  /** What to do with messages from other sessions (the `crossSessionInbound` setting); unset uses Claude Code's settings. */
+  inbound?: "accept" | "hold" | "refuse";
   /** Ask for a predicted next prompt after each turn (a `prompt_suggestion` message). */
   prompt_suggestions?: boolean;
 }
@@ -58,7 +62,29 @@ export interface PermissionResponse {
   message?: string;
 }
 
-export type Inbound = InitRequest | PromptRequest | InterruptRequest | SetPermissionModeRequest | PermissionResponse;
+/** Retitle the running session; this also changes the name other sessions message it by. */
+export interface RenameRequest {
+  type: "rename";
+  title: string;
+}
+
+/**
+ * Deliver the messages from other sessions that the inbound policy is holding. A headless
+ * session has no approval dialog; a settings change is what releases held messages, so this
+ * accepts inbound messages for a moment and then restores the previous setting.
+ */
+export interface DeliverHeldRequest {
+  type: "deliver_held";
+}
+
+export type Inbound =
+  | InitRequest
+  | PromptRequest
+  | InterruptRequest
+  | SetPermissionModeRequest
+  | PermissionResponse
+  | RenameRequest
+  | DeliverHeldRequest;
 
 // Sidecar -> Neovim
 

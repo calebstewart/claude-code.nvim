@@ -176,7 +176,7 @@ throughout.
 
 | Method | |
 |---|---|
-| `rename_session(title, callback?)` | |
+| `rename_session(title, opts?, callback?)` | Also renames the session for [cross-session messaging](https://code.claude.com/docs/en/cross-session-messaging). `opts.source`: `"host"` for a rename the user made in your application, which the CLI counts as a user rename (the CLI's default is `"remote"`). `opts.session_id`: refuse if the process has moved to another session |
 | `set_cwd(path, opts?, callback?)` | `opts.trust_accepted` |
 | `rewind_files(user_message_id, opts?, callback?)` | Undo file changes since a user message. `opts.dry_run` reports without touching anything |
 | `seed_read_state(path, mtime, callback?)` | Tell the CLI a file was already read, so an edit isn't refused for want of a prior `Read` |

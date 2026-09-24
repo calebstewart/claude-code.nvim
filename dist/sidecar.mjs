@@ -36825,8 +36825,16 @@ var canUseTool = (toolName, input, options) => new Promise((resolve5) => {
     agent_id: options.agentID
   });
 });
+async function deliverHeld() {
+  if (!session) return;
+  await session.applyFlagSettings({ crossSessionInbound: "accept" });
+  await session.applyFlagSettings({ crossSessionInbound: initRequest?.inbound ?? null });
+}
+var sessionId;
+var initRequest;
 async function run(init) {
-  const sessionId = init.resume ?? init.session_id ?? randomUUID2();
+  initRequest = init;
+  sessionId = init.resume ?? init.session_id ?? randomUUID2();
   session = DQt({
     prompt: inbox,
     options: {
@@ -36843,7 +36851,19 @@ async function run(init) {
       systemPrompt: { type: "preset", preset: "claude_code" },
       includePartialMessages: true,
       promptSuggestions: init.prompt_suggestions ?? true,
-      canUseTool
+      canUseTool,
+      settings: init.inbound ? { crossSessionInbound: init.inbound } : void 0,
+      extraArgs: {
+        // Echo user messages back: how a message from another session (which starts or joins
+        // a turn without a prompt from us) reaches the transcript.
+        "replay-user-messages": null,
+        ...init.name ? { name: init.name } : {}
+      },
+      env: {
+        ...process.env,
+        // system/session_state_changed: running and idle, whatever started the turn.
+        CLAUDE_CODE_EMIT_SESSION_STATE_EVENTS: "1"
+      }
     }
   });
   send({ type: "ready", session_id: sessionId });
@@ -36879,6 +36899,16 @@ function handle(request) {
     case "interrupt":
       session?.interrupt().catch((err) => {
         send({ type: "error", message: `Interrupt failed: ${String(err)}` });
+      });
+      return;
+    case "rename":
+      session?.renameSession(request.title, sessionId).catch((err) => {
+        send({ type: "error", message: `Rename failed: ${String(err)}` });
+      });
+      return;
+    case "deliver_held":
+      deliverHeld().catch((err) => {
+        send({ type: "error", message: `Couldn't deliver held messages: ${String(err)}` });
       });
       return;
     case "permission_response": {

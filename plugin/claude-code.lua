@@ -37,6 +37,9 @@ local subcommands = {
   image = function(args)
     require("claude-code").image(args)
   end,
+  deliver = function()
+    require("claude-code").deliver()
+  end,
   next = function()
     require("claude-code").next()
   end,

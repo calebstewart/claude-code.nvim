@@ -155,6 +155,16 @@ function M.image(path)
   end
 end
 
+--- Deliver the messages from other Claude sessions that the current session is holding.
+function M.deliver()
+  local s = sessions.current()
+  if not s then
+    vim.notify("claude-code: no current session", vim.log.levels.WARN)
+    return
+  end
+  s:deliver_held()
+end
+
 --- Switch to the next/previous session open in this Neovim.
 function M.next()
   sessions.cycle(1)

@@ -13,6 +13,8 @@ local sdk = require("claude-agent-sdk")
 ---@field private on_exit fun(code: integer, stderr: string)
 ---@field private permissions table<integer, { respond: fun(result: table), suggestions: table[] }>
 ---@field private next_permission integer
+---@field private session_id? string
+---@field private inbound? "accept"|"hold"|"refuse"
 local Cli = {}
 Cli.__index = Cli
 
@@ -68,6 +70,8 @@ end
 ---@param init claude_code.InitRequest
 function Cli:start(init)
   local session_id = init.resume or init.session_id
+  self.session_id = session_id
+  self.inbound = init.inbound
   self.query = sdk.query({
     executable = init.claude_path,
     cwd = init.cwd,
@@ -83,6 +87,15 @@ function Cli:start(init)
     include_partial_messages = true,
     -- Absent means on, as in the node sidecar.
     prompt_suggestions = init.prompt_suggestions ~= false,
+    extra_args = {
+      -- Echo user messages back: how a message from another session (which starts or
+      -- joins a turn without a prompt from us) reaches the transcript.
+      ["replay-user-messages"] = true,
+      name = init.name,
+      settings = init.inbound and vim.json.encode({ crossSessionInbound = init.inbound }) or nil,
+    },
+    -- system/session_state_changed: running and idle, whatever started the turn.
+    env = { CLAUDE_CODE_EMIT_SESSION_STATE_EVENTS = "1" },
     on_ready = function(info)
       self.on_event({ type = "ready", session_id = session_id })
       self.on_event({ type = "commands", commands = info.commands or {} })
@@ -140,6 +153,24 @@ function Cli:send(request)
         updated_permissions = updates,
       })
     end
+  elseif request.type == "rename" then
+    query:rename_session(request.title, { source = "host", session_id = self.session_id }, function(_, err)
+      if err then
+        self.on_event({ type = "error", message = "Rename failed: " .. err })
+      end
+    end)
+  elseif request.type == "deliver_held" then
+    -- Accepting releases every held message at once; nil (JSON null) then restores
+    -- whatever applied before. vim.NIL, not nil, so the key survives encoding.
+    query:apply_flag_settings({ crossSessionInbound = "accept" }, function(_, err)
+      if err then
+        self.on_event({ type = "error", message = "Couldn't deliver held messages: " .. err })
+        return
+      end
+      if self.query then
+        self.query:apply_flag_settings({ crossSessionInbound = self.inbound or vim.NIL })
+      end
+    end)
   else
     self.on_event({ type = "error", message = "Unknown request type: " .. tostring(request.type) })
   end

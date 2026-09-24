@@ -1,7 +1,7 @@
 +++
 title = "Sessions"
 weight = 5
-description = "The picker, the neo-tree sidebar, switching between conversations, idle suspension, and resuming from disk."
+description = "The picker, the neo-tree sidebar, switching between conversations, idle suspension, resuming from disk, and messages between sessions."
 +++
 
 Sessions are Claude Code's own, stored under `~/.claude/projects/`. A session started in the CLI shows up
@@ -78,7 +78,9 @@ prompt.
 ## Suspending and resuming
 
 A background session that stays idle for [`sessions.idle_timeout`](@/configuration.md#sessions-idle-timeout)
-minutes has its process stopped. Switching back to it, or sending to it, resumes it; nothing is lost.
+minutes has its process stopped. Switching back to it, or sending to it, resumes it; nothing is lost. A
+session that has been [messaging other sessions](#messages-between-sessions), or is holding messages for you,
+keeps running: a stopped session can't be messaged.
 
 Resuming a session from disk redraws its conversation — the last 200 messages.
 
@@ -91,6 +93,45 @@ Resuming a session from disk redraws its conversation — the last 200 messages.
 A new session's name is saved to disk after its first turn, and unnamed sessions pick up Claude Code's
 generated title. `:Claude rename [name]` renames the current one, and <kbd>C-r</kbd> does it from the
 picker.
+
+A name you give a session is also the name your other Claude sessions use to
+[message it](#messages-between-sessions). Renaming a running session renames it there at once, as the CLI's
+`/rename` does; a session that isn't running takes the new name when it next starts. A session you haven't
+named is listed under a name Claude Code makes up from its directory (`myproject-b1`, say).
+
+## Messages between sessions
+
+Claude Code sessions on the same machine can message each other: Claude lists them with its `ListAgents` tool
+and sends with `SendMessage`, over a local socket that never leaves the machine. See Claude Code's
+[cross-session messaging](https://code.claude.com/docs/en/cross-session-messaging) guide for the details.
+This works between sessions here, sessions in terminals, and the Desktop app alike. Ask for it in words,
+for example "tell the session named api-worker that the migration landed", and Claude writes the message.
+
+A message from another session shows up in the transcript under a header with the sender's name. You see its
+first line; <kbd>Tab</kbd> (or whatever [`keymaps.toggle_tool`](@/configuration.md#keymaps) is) expands the
+rest. If the session was idle, Claude answers it in a turn of its own. The status line shows that turn like
+one of yours, and <kbd>C-c</kbd> interrupts it. A message that arrives mid-turn appears where Claude read it.
+A session in the background also gets a notification.
+
+When Claude sends a message, the `SendMessage` line names the recipient. If the other session holds or
+refuses the message, a note says so.
+
+### Held messages
+
+Depending on its settings, a session can hold a message back rather than hand it to Claude. By default,
+Claude Code holds a message when one of the two sessions bypasses permission prompts and the other doesn't.
+[`messaging.inbound`](@/configuration.md#messaging-inbound) can also set it to hold everything. The CLI
+asks in a dialog. Here, a card appears at the end of the transcript saying who the message is from and why
+it's held:
+
+| Key | |
+|---|---|
+| <kbd>D</kbd> | Deliver every held message to Claude |
+| <kbd>X</kbd> | Hide the card. The messages stay held, and the status line keeps count |
+
+The keys work in the transcript only, so you can keep typing in the prompt. `:Claude deliver` does the same
+from anywhere. A message held because of the permission-mode difference is dropped after a few minutes
+(Claude Code's `dialogExpiry`) if nobody delivers it, and a note says so.
 
 ## Sessions open elsewhere
 

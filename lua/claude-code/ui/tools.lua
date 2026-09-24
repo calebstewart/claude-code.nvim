@@ -12,6 +12,12 @@ local M = {}
 ---@param input table
 ---@return string?
 function M.detail(input)
+  -- SendMessage: who to, and what about. A reply is addressed to a socket path, not a name.
+  if type(input.to) == "string" and type(input.message) == "string" then
+    local to = input.to:match("^%a+:") and "reply" or ("@" .. input.to)
+    local about = type(input.summary) == "string" and input.summary ~= "" and input.summary or input.message
+    return ("%s: %s"):format(to, (about:gsub("\n.*", " …")))
+  end
   local path = input.file_path or input.notebook_path or input.path
   if type(path) == "string" then
     return vim.fn.fnamemodify(path, ":~:.")
@@ -73,6 +79,12 @@ function M.summarize(name, input, text, is_error)
       end
       if #answers > 0 then
         return truncate(table.concat(answers, " · "), 120)
+      end
+    elseif name == "SendMessage" then
+      -- The result is JSON for Claude: { success, message, msg_id }.
+      local ok, sent = pcall(vim.json.decode, text)
+      if ok and type(sent) == "table" and sent.success ~= nil then
+        return sent.success and "Sent" or truncate(tostring(sent.message or sent.error or "Not sent"), 120)
       end
     elseif name == "Write" and type(input.content) == "string" then
       return ("%d lines written"):format(#vim.split(input.content, "\n", { plain = true, trimempty = true }))
@@ -228,6 +240,14 @@ function M.body(name, input, result, width)
   local lines ---@type claude_code.Chunk[]
   if name == "Edit" or name == "MultiEdit" or name == "Write" then
     lines = M.diff_lines(input)
+  elseif name == "PeerMessage" then
+    -- A message from another session: its first line is already in the transcript.
+    lines = {}
+    for i, line in ipairs(vim.split(vim.trim(result or ""), "\n", { plain = true })) do
+      if i > 1 then
+        table.insert(lines, { line, "ClaudeCodeToolOutput" })
+      end
+    end
   elseif (name == "Bash" or name == "Shell") and type(input.command) == "string" then
     lines = { { "$ " .. input.command:gsub("\n", " "), "ClaudeCodeToolDetail" } }
     for _, line in ipairs(vim.split(vim.trim(result or ""), "\n", { plain = true })) do
