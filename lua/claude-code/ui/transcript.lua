@@ -235,7 +235,8 @@ function Transcript:peer_message(id, from, body)
     right_gravity = false,
   })
   if #lines > 1 then
-    local toggle = require("claude-code.config").options.keymaps.toggle_tool
+    local config = require("claude-code.config")
+    local toggle = config.keys(config.options.keymaps.toggle_tool)
     local hint = toggle and toggle[1] and (" · %s to expand"):format(icons.key(toggle[1])) or ""
     entry.summary = api.nvim_buf_set_extmark(self.buf, ns, row, 0, {
       virt_lines = {

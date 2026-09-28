@@ -102,7 +102,9 @@ Defaults:
     submit = { n = "<CR>", i = { "<C-CR>", "<C-s>" } }, -- <C-CR> needs a terminal that reports it (Ghostty, kitty, WezTerm, …)
     interrupt = "<C-c>",     -- normal mode, transcript and prompt
     close = "q",             -- normal mode, transcript
-    toggle_tool = { "<Tab>", "<CR>" }, -- normal mode, transcript: expand/collapse tool output
+    toggle_tool = { "<Tab>", "<CR>" }, -- normal mode, transcript: expand/collapse tool output (off a tool call: open link)
+    open_link = "gx",        -- normal mode, transcript: open the link under the cursor
+    click_link = "<C-LeftMouse>", -- transcript or prompt: open the clicked link
     cycle_mode = "<S-Tab>",  -- prompt and transcript: cycle default → accept edits → plan → auto
     paste_image = "<C-v>",   -- prompt, insert mode: paste an image from the clipboard
   },
@@ -136,6 +138,11 @@ doing, the model and the session cost.
   mode; `prompt_suggestions = false` (or `promptSuggestionEnabled: false` in Claude Code's settings) turns it off.
 - In the transcript, `i`/`a`/`o` jump to the prompt, `<Tab>`/`<CR>` on a tool call expand its output (or an
   edit's diff), and `q` hides the chat.
+- `gx` (or `<CR>`) on a link, or Ctrl+click, opens it: URLs with the system handler (`vim.ui.open`), and files in the editor
+  window beside the chat, at the line when there is one (`src/app.ts:42`, `[app.ts](src/app.ts#L42)`). This
+  covers markdown links (even with the destination concealed), reference links, bare URLs and bare file
+  paths, relative to the session's directory. Ctrl+click works while the cursor is in the chat (transcript or
+  prompt); mappings follow the cursor's buffer, so from another window it's Neovim's usual Ctrl+click.
 - `:q` in any of the chat's windows closes the whole sidebar; the session keeps running.
 - `:Claude here` opens the chat in the current window instead of a sidebar, so `nvim +"Claude here"` gives
   you a Neovim that's just Claude (`:q` in the chat then quits). Switching sessions stays in that window, and

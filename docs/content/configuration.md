@@ -28,7 +28,9 @@ the defaults with `vim.tbl_deep_extend("force", …)`, so a partial table only o
     submit = { n = "<CR>", i = { "<C-CR>", "<C-s>" } }, -- <C-CR> needs a terminal that reports it (Ghostty, kitty, WezTerm, …)
     interrupt = "<C-c>",     -- normal mode, transcript and prompt
     close = "q",             -- normal mode, transcript
-    toggle_tool = { "<Tab>", "<CR>" }, -- normal mode, transcript: expand/collapse tool output
+    toggle_tool = { "<Tab>", "<CR>" }, -- normal mode, transcript: expand/collapse tool output (off a tool call: open link)
+    open_link = "gx",        -- normal mode, transcript: open the link under the cursor
+    click_link = "<C-LeftMouse>", -- transcript or prompt: open the clicked link
     cycle_mode = "<S-Tab>",  -- prompt and transcript: cycle default → accept edits → plan → auto
     paste_image = "<C-v>",   -- prompt, insert mode: paste an image from the clipboard
   },
@@ -131,7 +133,9 @@ chat only; the plugin creates no global mappings.
 | `keymaps.submit` | `{ n = "<CR>", i = { "<C-CR>", "<C-s>" } }` | Prompt | Send the prompt |
 | `keymaps.interrupt` | `"<C-c>"` | Transcript and prompt, normal | Stop the turn in progress |
 | `keymaps.close` | `"q"` | Transcript, normal | Hide the chat |
-| `keymaps.toggle_tool` | `{ "<Tab>", "<CR>" }` | Transcript, normal | Expand/collapse tool output, or an edit's diff |
+| `keymaps.toggle_tool` | `{ "<Tab>", "<CR>" }` | Transcript, normal | Expand/collapse tool output, or an edit's diff; elsewhere, open the link under the cursor |
+| `keymaps.open_link` | `"gx"` | Transcript, normal | Open the link under the cursor: URLs in the browser, files in the editor |
+| `keymaps.click_link` | `"<C-LeftMouse>"` | Transcript and prompt | Open the link clicked in the transcript |
 | `keymaps.cycle_mode` | `"<S-Tab>"` | Transcript and prompt | Cycle default → accept edits → plan → auto |
 | `keymaps.paste_image` | `"<C-v>"` | Prompt, insert | Paste an image from the clipboard |
 

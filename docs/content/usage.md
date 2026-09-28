@@ -12,6 +12,14 @@ border shows what Claude is doing, the model, and the session cost.
 
 - In the transcript, <kbd>i</kbd>, <kbd>a</kbd> and <kbd>o</kbd> jump to the prompt, <kbd>Tab</kbd> or
   <kbd>CR</kbd> on a tool call expands its output (or an edit's diff), and <kbd>q</kbd> hides the chat.
+- <kbd>gx</kbd> (or <kbd>CR</kbd>) on a link, or <kbd>Ctrl</kbd>+click, opens it. URLs go to the system handler (`vim.ui.open`, so your
+  browser); files open in the editor window beside the chat, at the line if the link names one
+  (`src/app.ts:42`, or `[app.ts](src/app.ts#L42)` as Claude writes them). Markdown links work even while
+  their destination is concealed, as do reference links, bare URLs and bare file paths. Relative paths are
+  taken from the session's directory. Ctrl+click works while the cursor is in the chat, transcript or
+  prompt; keymaps follow the buffer the cursor is in, so from another window you get Neovim's usual
+  Ctrl+click. (On macOS, some terminals turn Ctrl+click into a right-click; set
+  [`keymaps.click_link`](@/configuration.md#keymaps) to another click, such as `"<2-LeftMouse>"`.)
 - `:q` in any of the chat's windows closes the whole sidebar. The session keeps running.
 - `:Claude here` opens the chat in the current window instead of a sidebar, so `nvim +"Claude here"` gives
   you a Neovim that is just Claude — `:q` in the chat then quits. Switching sessions stays in that window,

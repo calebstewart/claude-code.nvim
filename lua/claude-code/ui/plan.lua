@@ -3,7 +3,6 @@
 -- picked up when the plan is approved.
 
 local api = vim.api
-local config = require("claude-code.config")
 
 local M = {}
 
@@ -24,31 +23,6 @@ function M.window(path)
   end
 end
 
---- The editor window nearest the chat sidebar (not one of the chat's own, not a float).
----@param chat claude_code.Chat
----@return integer?
-local function editor_window(chat)
-  local ours = chat:windows()
-  local position = config.options.window.position
-  local editor, best
-  for _, win in ipairs(api.nvim_tabpage_list_wins(0)) do
-    local is_chat = win == ours.transcript or win == ours.dock or win == ours.prompt
-    if not is_chat and api.nvim_win_get_config(win).relative == "" then
-      local row, col = unpack(api.nvim_win_get_position(win))
-      local score = ({
-        right = col + api.nvim_win_get_width(win),
-        left = -col,
-        bottom = row + api.nvim_win_get_height(win),
-        top = -row,
-      })[position] or col
-      if not best or score > best then
-        editor, best = win, score
-      end
-    end
-  end
-  return editor
-end
-
 --- Show the plan next to the chat: in the editor window beside it if there is
 --- one (as another buffer), otherwise in a new split. Focuses it.
 ---@param path string
@@ -64,15 +38,7 @@ function M.open(path, chat)
   local buf = vim.fn.bufadd(path)
   vim.fn.bufload(buf)
   vim.bo[buf].buflisted = true
-  local win = editor_window(chat)
-  if win then
-    api.nvim_win_set_buf(win, buf)
-    api.nvim_set_current_win(win)
-  else
-    -- Only the chat is open: make room beside it.
-    local position = config.options.window.position
-    win = api.nvim_open_win(buf, true, { split = position == "left" and "right" or "left", win = -1 })
-  end
+  local win = chat:show_in_editor(buf)
   -- Local to this buffer in this window, so it goes away when you switch back to your file.
   vim.wo[win][0].winbar = WINBAR
 end

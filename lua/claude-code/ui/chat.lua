@@ -186,6 +186,98 @@ function Chat:visible()
   return self:windows().transcript ~= nil
 end
 
+--- The editor window nearest the chat sidebar (not one of the chat's own, not a float).
+---@return integer?
+function Chat:editor_window()
+  local ours = self:windows()
+  local position = config.options.window.position
+  local editor, best
+  for _, win in ipairs(api.nvim_tabpage_list_wins(0)) do
+    local is_chat = win == ours.transcript or win == ours.dock or win == ours.prompt
+    if not is_chat and api.nvim_win_get_config(win).relative == "" then
+      local row, col = unpack(api.nvim_win_get_position(win))
+      local score = ({
+        right = col + api.nvim_win_get_width(win),
+        left = -col,
+        bottom = row + api.nvim_win_get_height(win),
+        top = -row,
+      })[position] or col
+      if not best or score > best then
+        editor, best = win, score
+      end
+    end
+  end
+  return editor
+end
+
+--- Show `buf` next to the chat: in the editor window beside it if there is one,
+--- otherwise in a new split. Focuses it.
+---@param buf integer
+---@return integer win
+function Chat:show_in_editor(buf)
+  local win = self:editor_window()
+  if win then
+    api.nvim_win_set_buf(win, buf)
+    api.nvim_set_current_win(win)
+  else
+    -- Only the chat is open: make room beside it.
+    local position = config.options.window.position
+    win = api.nvim_open_win(buf, true, { split = position == "left" and "right" or "left", win = -1 })
+  end
+  return win
+end
+
+--- Open the link under the cursor in the transcript: URLs with the system handler
+--- (`vim.ui.open`), files and directories in the editor window beside the chat.
+---@param opts? { quiet?: boolean } Say nothing when there's no link under the cursor.
+---@return boolean opened
+function Chat:open_link(opts)
+  local links = require("claude-code.ui.links")
+  local win = api.nvim_get_current_win()
+  local row, col = unpack(api.nvim_win_get_cursor(win))
+  local target, explicit = links.at(self.transcript.buf, row - 1, col)
+  local file = target and links.file(target, self.opts.cwd or vim.fn.getcwd())
+  local url = target and not file and explicit and links.url(target)
+  if file then
+    local buf = vim.fn.bufadd(file.path)
+    vim.bo[buf].buflisted = true
+    local editor = self:show_in_editor(buf)
+    if file.line then
+      local last = api.nvim_buf_line_count(buf)
+      pcall(api.nvim_win_set_cursor, editor, { math.min(file.line, last), math.max((file.col or 1) - 1, 0) })
+      vim.cmd("normal! zz")
+    end
+    return true
+  elseif url then
+    local _, err = vim.ui.open(url)
+    if err then
+      vim.notify("claude-code: " .. err, vim.log.levels.ERROR)
+    end
+    return true
+  end
+  if not (opts and opts.quiet) then
+    local msg = explicit and ("no such file: " .. target) or "no link under the cursor"
+    vim.notify("claude-code: " .. msg, vim.log.levels.WARN)
+  end
+  return false
+end
+
+--- Open the link that was just clicked in the transcript (for a mouse mapping). The cursor
+--- moves to the click either way, as a plain click would put it.
+function Chat:click_link()
+  local win = self:windows().transcript
+  if not win or vim.fn.getmousepos().winid ~= win then
+    return
+  end
+  -- Replay it as a plain click so Neovim positions the cursor: that accounts for
+  -- concealed text (link destinations), which getmousepos()'s column doesn't.
+  api.nvim_feedkeys(api.nvim_replace_termcodes("<LeftMouse>", true, false, true), "nx", false)
+  if api.nvim_get_current_win() == win then
+    vim.cmd("stopinsert")
+    self:open_link({ quiet = true })
+  end
+end
+
 --- The chat's windows are stacked, and the row between them is drawn either as
 --- a statusline or as a window separator depending on 'laststatus'. Both are
 --- hidden so the pane reads as one surface; only the edge against the rest of
@@ -541,10 +633,27 @@ function Chat:apply_keymaps()
     map(self.prompt.buf, { "n", "i" }, keys.cycle_mode, self.opts.on_cycle_mode, "cycle permission mode")
     map(self.transcript.buf, "n", keys.cycle_mode, self.opts.on_cycle_mode, "cycle permission mode")
   end
-  for _, lhs in ipairs(keys.toggle_tool or {}) do
+  for _, lhs in ipairs(config.keys(keys.toggle_tool)) do
     map(self.transcript.buf, "n", lhs, function()
-      self.transcript:toggle_tool_at(api.nvim_win_get_cursor(0)[1] - 1)
-    end, "expand/collapse tool output")
+      -- Off a tool call, the same key follows a link under the cursor.
+      if not self.transcript:toggle_tool_at(api.nvim_win_get_cursor(0)[1] - 1) then
+        self:open_link({ quiet = true })
+      end
+    end, "expand/collapse tool output or open link")
+  end
+  for _, lhs in ipairs(config.keys(keys.open_link)) do
+    map(self.transcript.buf, "n", lhs, function()
+      self:open_link()
+    end, "open link")
+  end
+  -- Mappings belong to the buffer with the cursor, not the one clicked, so the
+  -- click is also mapped in the prompt (where the cursor usually is).
+  local click = function()
+    self:click_link()
+  end
+  for _, lhs in ipairs(config.keys(keys.click_link)) do
+    map(self.transcript.buf, "n", lhs, click, "open clicked link")
+    map(self.prompt.buf, { "n", "i" }, lhs, click, "open clicked link")
   end
 end
 

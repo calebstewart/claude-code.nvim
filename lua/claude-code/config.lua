@@ -32,7 +32,9 @@ local M = {}
 ---@field submit { n: string|string[]|false, i: string|string[]|false } Send the prompt (normal and insert mode).
 ---@field interrupt string|false Interrupt the turn in progress (normal mode, both windows).
 ---@field close string|false Hide the chat (normal mode, transcript window).
----@field toggle_tool string[]|false Expand/collapse the tool call under the cursor (normal mode, transcript window).
+---@field toggle_tool string|string[]|false Expand/collapse the tool call under the cursor, or open the link under it (normal mode, transcript window).
+---@field open_link string|string[]|false Open the link under the cursor: URLs in the browser, files in the editor (normal mode, transcript window).
+---@field click_link string|string[]|false Mouse click that opens the link clicked in the transcript (from the transcript or prompt).
 ---@field cycle_mode string|false Cycle the permission mode: default -> accept edits -> plan (prompt, both modes).
 ---@field paste_image string|false Paste an image from the clipboard into the prompt (insert mode).
 
@@ -55,6 +57,8 @@ M.defaults = {
     interrupt = "<C-c>",
     close = "q",
     toggle_tool = { "<Tab>", "<CR>" },
+    open_link = "gx",
+    click_link = "<C-LeftMouse>",
     cycle_mode = "<S-Tab>",
     paste_image = "<C-v>",
   },
