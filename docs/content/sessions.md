@@ -42,7 +42,8 @@ require("neo-tree").setup({
 
 Then `:Neotree claude_sessions` (or `:Neotree toggle claude_sessions`) opens it in the file tree's place;
 with neo-tree's `source_selector`, it gets a tab next to Files. The current project is listed first and
-expanded. Other projects load their sessions when expanded.
+expanded. Other projects load their sessions when expanded. A git repository's worktrees aren't listed as
+projects of their own: their sessions are listed under the main worktree, as the picker lists them.
 
 | Key | |
 |---|---|

@@ -9,7 +9,8 @@
 -- Add "claude-code.neo-tree" to neo-tree's `sources`, then `:Neotree claude_sessions`.
 -- Sessions open with <CR> like files do; `a`, `r` and `d` start, rename and
 -- delete them. The current project is listed first and expanded; the others
--- load their sessions when expanded.
+-- load their sessions when expanded. A repository's worktrees are listed under
+-- its main worktree.
 
 local listing = require("claude-code.listing")
 local manager = require("neo-tree.sources.manager")
@@ -28,11 +29,18 @@ function M.project_id(cwd)
   return "claude:project:" .. cwd
 end
 
---- Every project to list: those with sessions on disk, Neovim's cwd (pinned
+--- The current project: Neovim's cwd, or the main worktree of the repository
+--- when it's one of its worktrees.
+---@return string
+local function current()
+  return model.root(vim.fn.getcwd(), true)
+end
+
+--- Every project to list: those with sessions on disk, the current one (pinned
 --- first, even with none yet) and any with a session open here.
 ---@return claude_code.tree.Project[]
 local function projects()
-  local cwd = vim.fn.getcwd()
+  local cwd = current()
   local list, seen = {}, {}
   local function add(project)
     if not seen[project.cwd] then
@@ -41,7 +49,7 @@ local function projects()
     end
   end
   add({ cwd = cwd, sessions = 0, lastModified = 0 })
-  for _, project in ipairs(model.projects or {}) do
+  for _, project in ipairs(model.grouped() or {}) do
     if project.cwd == cwd then
       list[1] = project
     else
@@ -49,7 +57,7 @@ local function projects()
     end
   end
   for _, s in ipairs(require("claude-code.sessions").live()) do
-    add({ cwd = s.cwd, sessions = 0, lastModified = s.last_active * 1000 })
+    add({ cwd = model.root(s.cwd), sessions = 0, lastModified = s.last_active * 1000 })
   end
   return list
 end
@@ -128,7 +136,7 @@ local function project_children(project, filter)
   end
   local children = {}
   local entries = listing.merge(stored, function(s)
-    return s.cwd == cwd
+    return model.root(s.cwd) == cwd
   end)
   for _, entry in ipairs(entries) do
     if matches(entry, filter) then
@@ -165,7 +173,7 @@ end
 function M.live_entries(cwd)
   local out = {}
   for _, s in ipairs(require("claude-code.sessions").live()) do
-    if s.cwd == cwd then
+    if model.root(s.cwd) == cwd then
       table.insert(out, { id = s.id, title = s.title or "", last_used = s.last_active, live = s })
     end
   end
@@ -231,7 +239,7 @@ local started = false
 ---@param state table neotree.State
 M.navigate = function(state, path, path_to_reveal, callback)
   state.dirty = false
-  state.path = vim.fn.getcwd()
+  state.path = current()
   if not started then
     -- First show: list projects, and the current one's sessions, expanded.
     started = true
@@ -257,10 +265,10 @@ M.navigate = function(state, path, path_to_reveal, callback)
   local filter = state.claude_filter
   if filter then
     -- Open every project with a match.
-    for _, project in ipairs(model.projects or {}) do
+    for _, project in ipairs(model.grouped() or {}) do
       table.insert(expand, M.project_id(project.cwd))
     end
-    table.insert(expand, M.project_id(vim.fn.getcwd()))
+    table.insert(expand, M.project_id(current()))
   end
   state.default_expanded_nodes = expand
   if path_to_reveal then
@@ -307,7 +315,7 @@ M.setup = function(config, global_config)
     event = require("neo-tree.events").VIM_DIR_CHANGED,
     handler = function()
       if started then
-        M.expand(vim.fn.getcwd())
+        M.expand(current())
       end
     end,
   })
