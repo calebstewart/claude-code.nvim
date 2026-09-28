@@ -101,6 +101,7 @@ Defaults:
   keymaps = {                -- set any entry to false to disable it
     submit = { n = "<CR>", i = { "<C-CR>", "<C-s>" } }, -- <C-CR> needs a terminal that reports it (Ghostty, kitty, WezTerm, …)
     interrupt = "<C-c>",     -- normal mode, transcript and prompt
+    send_now = "<M-CR>",     -- prompt: interrupt Claude and send the queued messages now
     close = "q",             -- normal mode, transcript
     toggle_tool = { "<Tab>", "<CR>" }, -- normal mode, transcript: expand/collapse tool output (off a tool call: open link)
     open_link = "gx",        -- normal mode, transcript: open the link under the cursor
@@ -153,6 +154,9 @@ doing, the model and the session cost.
   Code's list for the session, minus ones tied to its terminal UI), filtered fuzzily as you type. `<Tab>`
   completes, `<Up>`/`<Down>` move. Output of built-in commands like `/context` appears in the transcript.
   nvim-cmp and blink.cmp are paused in the prompt while you type a command, so only one menu shows.
+- **Queueing:** sending while Claude works queues the message, shown dimmed above the prompt, and it goes out
+  when the turn ends. `<Up>` pulls the queue back into the prompt to edit, `<M-CR>` interrupts Claude and sends
+  it now, and `<C-c>` interrupts and returns it to the prompt.
 - **Images:** `<C-v>` in the prompt pastes an image from the clipboard (a terminal can only paste text, so, like
   the CLI, the plugin asks the OS for it: `osascript` on macOS, `wl-paste` or `xclip` on Linux). Pasting or
   dragging in a path to a PNG, JPEG, GIF or WebP file attaches it too, as does `:Claude image <path>`. Each
@@ -242,6 +246,7 @@ and vice versa, names included.
 | `:Claude here` | Open the chat in the current window (e.g. `nvim +"Claude here"`) |
 | `:Claude send [text]` | Send `text` (or just focus the prompt) |
 | `:Claude interrupt` | Stop the turn in progress |
+| `:Claude send-now` | Interrupt Claude and send the queued messages right away |
 | `:Claude sessions` | Pick a session to switch to or resume |
 | `:Claude new [name]` | Start a new session (asks for a name if none is given; leave it empty for none) |
 | `:Claude rename [name]` | Rename the current session (asks if no name is given) |

@@ -30,7 +30,8 @@ local M = {}
 --- Chat keymaps. Set any entry to `false` to disable it.
 ---@class claude_code.KeymapConfig
 ---@field submit { n: string|string[]|false, i: string|string[]|false } Send the prompt (normal and insert mode).
----@field interrupt string|false Interrupt the turn in progress (normal mode, both windows).
+---@field interrupt string|false Interrupt the turn in progress (normal mode, both windows). Anything queued goes back to the prompt.
+---@field send_now string|string[]|false Interrupt Claude and send the queued messages, with the prompt's text, right away (prompt, both modes).
 ---@field close string|false Hide the chat (normal mode, transcript window).
 ---@field toggle_tool string|string[]|false Expand/collapse the tool call under the cursor, or open the link under it (normal mode, transcript window).
 ---@field open_link string|string[]|false Open the link under the cursor: URLs in the browser, files in the editor, mermaid blocks rendered in the browser (normal mode, transcript window).
@@ -55,6 +56,7 @@ M.defaults = {
     -- WezTerm, foot, ...); <C-s> works everywhere.
     submit = { n = "<CR>", i = { "<C-CR>", "<C-s>" } },
     interrupt = "<C-c>",
+    send_now = "<M-CR>",
     close = "q",
     toggle_tool = { "<Tab>", "<CR>" },
     open_link = "gx",

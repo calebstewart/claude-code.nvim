@@ -114,11 +114,19 @@ function M.get()
   return sets[config.options.icons] or sets.nerd
 end
 
---- Compact key names for hints: `<C-s>` -> `^S`, `<CR>` -> `⏎`, `<C-CR>` -> `^⏎`.
+--- Compact key names for hints: `<C-s>` -> `^S`, `<CR>` -> `⏎`, `<C-CR>` -> `^⏎`, `<M-CR>` -> `M-⏎`.
 ---@param lhs string
 ---@return string
 function M.key(lhs)
-  local named = { ["<cr>"] = "⏎", ["<c-cr>"] = "^⏎", ["<tab>"] = "⇥", ["<s-tab>"] = "⇧⇥", ["<esc>"] = "esc" }
+  local named = {
+    ["<cr>"] = "⏎",
+    ["<c-cr>"] = "^⏎",
+    ["<m-cr>"] = "M-⏎",
+    ["<a-cr>"] = "M-⏎",
+    ["<tab>"] = "⇥",
+    ["<s-tab>"] = "⇧⇥",
+    ["<esc>"] = "esc",
+  }
   if named[lhs:lower()] then
     return named[lhs:lower()]
   end

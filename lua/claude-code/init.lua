@@ -64,6 +64,14 @@ function M.interrupt()
   end
 end
 
+--- Interrupt Claude and send the queued messages right away.
+function M.send_now()
+  local s = sessions.current()
+  if s then
+    s:send_now()
+  end
+end
+
 --- End the current session and close it (it stays on disk; resume it from the picker).
 function M.stop()
   local s = sessions.current()

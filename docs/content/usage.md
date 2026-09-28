@@ -29,6 +29,21 @@ border shows what Claude is doing, the model, and the session cost.
   you a Neovim that is just Claude — `:q` in the chat then quits. Switching sessions stays in that window,
   and hiding the chat gives the window back.
 
+## Queueing messages
+
+Sending while Claude is working queues the message instead, as the CLI does. Queued messages show dimmed
+above the prompt, and the border counts them. When the turn ends they go to Claude together, as one
+message.
+
+- <kbd>Up</kbd> on the prompt's first line pulls the queue back into the prompt to edit. Send it again to
+  re-queue it.
+- <kbd>M-CR</kbd> (Alt+Enter) sends now: it interrupts Claude and sends the queue, with whatever is in the
+  prompt, straight away. `:Claude send-now` does the same.
+- <kbd>C-c</kbd> interrupts without sending. Anything queued goes back to the prompt, so nothing reaches
+  Claude without you.
+
+A message sent while one of your own `!commands` runs is queued the same way, and goes out when it exits.
+
 ## Prompt history
 
 <kbd>Up</kbd> and <kbd>Down</kbd> on the first or last line of the prompt step through earlier prompts for

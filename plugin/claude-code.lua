@@ -19,6 +19,9 @@ local subcommands = {
   interrupt = function()
     require("claude-code").interrupt()
   end,
+  ["send-now"] = function()
+    require("claude-code").send_now()
+  end,
   stop = function()
     require("claude-code").stop()
   end,

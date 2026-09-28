@@ -93,7 +93,36 @@ function Prompt:accept_suggestion()
   return true
 end
 
----@private
+--- Put queued prompts back for editing, ahead of whatever is being typed, with
+--- their images (under the labels they already have).
+---@param items { text: string, attachments: { label: string, image: claude_code.Image }[] }[]
+function Prompt:restore(items)
+  local texts = {}
+  for _, item in ipairs(items) do
+    table.insert(texts, item.text)
+    vim.list_extend(self.attachments, item.attachments)
+  end
+  local current = self:text()
+  if current ~= "" then
+    table.insert(texts, current)
+  end
+  local lines = vim.split(table.concat(texts, "\n\n"), "\n", { plain = true })
+  api.nvim_buf_set_lines(self.buf, 0, -1, false, lines)
+  self.history, self.history_index, self.draft = nil, nil, nil
+  local win = vim.fn.bufwinid(self.buf)
+  if win ~= -1 then
+    api.nvim_win_set_cursor(win, { #lines, #lines[#lines] })
+  end
+  self:update_placeholder()
+  self:highlight_attachments()
+end
+
+--- Browsing history (so <Up> keeps going back rather than pulling up the queue).
+function Prompt:browsing()
+  return self.history_index ~= nil
+end
+
+--- Nothing typed (a showing suggestion doesn't count).
 function Prompt:empty()
   return api.nvim_buf_line_count(self.buf) == 1 and api.nvim_buf_get_lines(self.buf, 0, 1, false)[1] == ""
 end

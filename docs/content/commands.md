@@ -16,6 +16,7 @@ after `image`, and mode names after `mode`.
 | `:Claude here` | Open the chat in the current window (e.g. `nvim +"Claude here"`) |
 | `:Claude send [text]` | Send `text`, or just focus the prompt |
 | `:Claude interrupt` | Stop the turn in progress |
+| `:Claude send-now` | Interrupt Claude and send the [queued messages](@/usage.md#queueing-messages) right away |
 | `:Claude sessions` | Pick a session to switch to or resume |
 | `:Claude new [name]` | Start a new session (asks for a name if none is given; leave it empty for none) |
 | `:Claude rename [name]` | Rename the current session (asks if no name is given) |
@@ -39,6 +40,7 @@ need arguments or conditions.
 | `toggle()` | Show or hide the chat |
 | `send(text?)` | Send a prompt; with no text, focus the prompt instead |
 | `interrupt()` | Interrupt the turn in progress |
+| `send_now()` | Interrupt Claude and send the queued messages right away |
 | `stop()` | End the current session and close it. It stays on disk |
 | `sessions()` | Open the session picker |
 | `new(name?)` | Start a new session. With no name, asks for one |

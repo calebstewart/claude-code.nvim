@@ -45,8 +45,16 @@ local transport = require("claude-code.transport")
 ---@field private reply_has_text boolean
 ---@field private interrupted boolean
 ---@field private cost number Cumulative session cost reported by the last result.
+---@field private queue claude_code.QueuedMessage[] Prompts sent while Claude was working, delivered when the turn ends.
+---@field private state_events boolean Claude Code reports session_state_changed (so idle, not the result, ends a turn).
 local Session = {}
 Session.__index = Session
+
+---@class claude_code.QueuedMessage
+---@field text string
+---@field attachments { label: string, image: claude_code.Image }[] As attached in the prompt (to restore it for editing).
+---@field payload table[] Images prepared for sending.
+---@field shown table[] Images as the transcript shows them.
 
 local count = 0
 
@@ -170,6 +178,8 @@ function Session.new(opts)
     reply_has_text = false,
     interrupted = false,
     cost = 0,
+    queue = {},
+    state_events = false,
   }, Session)
   self.chat = Chat.new({
     id = count,
@@ -180,6 +190,12 @@ function Session.new(opts)
     end,
     on_interrupt = function()
       self:interrupt()
+    end,
+    on_send_now = function(text, attachments)
+      return self:send_now(text, attachments)
+    end,
+    on_edit_queue = function()
+      return self:edit_queue()
     end,
     session_id = function()
       return self.id
@@ -238,6 +254,7 @@ function Session:is_placeholder()
     and not self.pending_title
     and not self.busy
     and not self.shell
+    and #self.queue == 0
     and not self:needs_attention()
     and self.chat:valid()
     and self.chat.transcript:empty()
@@ -276,6 +293,8 @@ function Session:start()
       self.busy = false
       self.permissions:clear()
       self.held:clear()
+      -- Nothing is left to deliver the queue after; give it back rather than lose it.
+      self:return_queue()
       self.chat:set_status({ activity = nil, stopped = self.suspending and "suspended" or "ended" })
       if code ~= 0 and not self.suspending then
         vim.notify(("claude-code: sidecar exited with code %d\n%s"):format(code, stderr), vim.log.levels.ERROR)
@@ -416,7 +435,7 @@ end
 --- Not while messages from other sessions wait on you (they'd be lost), nor once
 --- it's been talking to another session: a stopped session can't be messaged.
 function Session:suspend()
-  local keep = self.busy or self:needs_attention() or self.held:count() > 0 or self.messaging
+  local keep = self.busy or self:needs_attention() or self.held:count() > 0 or self.messaging or #self.queue > 0
   if self:running() and not keep then
     self.suspending = true
     self.sidecar:stop()
@@ -527,12 +546,36 @@ function Session:finish_shell(command, shell, result)
     self.chat:set_status({ activity = "Thinking" })
   elseif not self.busy then
     self.chat:set_status({ activity = nil })
+    if not self.state_events then
+      -- Otherwise the context-only message's idle (see settle) sends it, after that message.
+      self:flush_queue()
+    end
   end
 end
 
+--- Prepare a prompt's images for sending. A failure (e.g. too large to shrink)
+--- is reported, and the prompt should stay as it is.
+---@param text string
+---@param attachments? { label: string, image: claude_code.Image }[]
+---@return claude_code.QueuedMessage?
+local function prepare(text, attachments)
+  local payload, shown = {}, {}
+  for _, a in ipairs(attachments or {}) do
+    local image, sent, err = require("claude-code.images").attachment(a.image)
+    if not image then
+      vim.notify(("claude-code: %s: %s"):format(a.label, err), vim.log.levels.ERROR)
+      return nil
+    end
+    table.insert(payload, image)
+    table.insert(shown, { label = a.label, image = a.image, sent = sent })
+  end
+  return { text = text, attachments = attachments or {}, payload = payload, shown = shown }
+end
+
+--- Send a prompt now, or queue it while Claude (or a `!command`) is working.
 ---@param text string
 ---@param attachments? { label: string, image: claude_code.Image }[] Images to send with it.
----@return boolean sent
+---@return boolean sent Sent or queued: the prompt can be cleared.
 function Session:send(text, attachments)
   local command = text:match("^!%s*(.-)%s*$")
   if command and command ~= "" then
@@ -544,53 +587,154 @@ function Session:send(text, attachments)
     -- Not "sent": the chat's buffers are gone, so there's no prompt to clear.
     return false
   end
-  if self.busy then
-    vim.notify("claude-code: Claude is still working; interrupt it first", vim.log.levels.WARN)
+  local message = prepare(text, attachments)
+  if not message then
     return false
   end
-  if self.shell then
-    vim.notify("claude-code: wait for the shell command to finish (or stop it)", vim.log.levels.WARN)
-    return false
+  if self.busy or self.shell then
+    -- Delivered when the turn ends; editable until then.
+    self:enqueue(message)
+    return true
+  elseif #self.queue > 0 then
+    -- Something is still queued: this goes out with it, after it.
+    self:enqueue(message)
+    self:flush_queue()
+    return true
   end
-  -- Prepare images first: a failure (e.g. too large to shrink) keeps the prompt as it is.
-  local payload, shown = {}, {}
-  for _, a in ipairs(attachments or {}) do
-    local image, sent, err = require("claude-code.images").attachment(a.image)
-    if not image then
-      vim.notify(("claude-code: %s: %s"):format(a.label, err), vim.log.levels.ERROR)
-      return false
-    end
-    table.insert(payload, image)
-    table.insert(shown, { label = a.label, image = a.image, sent = sent })
-  end
+  return self:dispatch(message)
+end
+
+--- Send a prepared prompt to Claude, starting a turn.
+---@private
+---@param message claude_code.QueuedMessage
+---@return boolean sent
+function Session:dispatch(message)
   self:ensure_running()
   if not self:running() then
     return false -- couldn't start (its directory is gone); keep the prompt
   end
   self.last_active = os.time()
   self.chat.prompt:suggest(nil)
-  self.chat.transcript:user_message(text, shown)
+  self.chat.transcript:user_message(message.text, message.shown)
   self.busy = true
   self.in_reply = false
   self.reply_has_text = false
   self.interrupted = false
   self.chat:set_status({ activity = "Thinking" })
-  self.sidecar:send({ type = "prompt", text = text, images = #payload > 0 and payload or nil })
+  local payload = #message.payload > 0 and message.payload or nil
+  self.sidecar:send({ type = "prompt", text = message.text, images = payload })
   return true
 end
 
-function Session:interrupt()
-  if self.shell then
-    -- A running `!command` is what you're waiting on: stop that first.
-    self.shell.killed = true
-    self.shell.job:kill("sigterm")
+---@private
+---@param message claude_code.QueuedMessage
+function Session:enqueue(message)
+  table.insert(self.queue, message)
+  self.last_active = os.time()
+  self.chat:set_queue(self.queue)
+end
+
+--- Send everything queued as one prompt, as the CLI does, once nothing is in the way.
+---@private
+function Session:flush_queue()
+  if #self.queue == 0 or self.busy or self.shell or self:needs_attention() then
     return
   end
+  local texts = {}
+  local message = { attachments = {}, payload = {}, shown = {} }
+  for _, m in ipairs(self.queue) do
+    table.insert(texts, m.text)
+    vim.list_extend(message.attachments, m.attachments)
+    vim.list_extend(message.payload, m.payload)
+    vim.list_extend(message.shown, m.shown)
+  end
+  message.text = table.concat(texts, "\n\n")
+  local queue = self.queue
+  self.queue = {}
+  self.chat:set_queue(self.queue)
+  if not self:dispatch(message) then
+    -- Couldn't start (its directory is gone): back to the prompt, rather than stuck.
+    self.chat:restore_queue(queue)
+  end
+end
+
+--- Put the queued prompts back in the prompt (ahead of what's there), to edit or drop.
+---@private
+---@return boolean returned Anything was queued.
+function Session:return_queue()
+  if #self.queue == 0 then
+    return false
+  end
+  local queue = self.queue
+  self.queue = {}
+  self.chat:set_queue(self.queue)
+  self.chat:restore_queue(queue)
+  return true
+end
+
+--- Pull the queue back into the prompt for editing (<Up>, as in the CLI).
+---@return boolean pulled
+function Session:edit_queue()
+  return self:return_queue()
+end
+
+--- Interrupt Claude and send the queue (plus `text`, if given) right away.
+---@param text? string The prompt's text, sent along with the queue.
+---@param attachments? { label: string, image: claude_code.Image }[]
+---@return boolean sent The prompt was taken (sent or queued), so it can be cleared.
+function Session:send_now(text, attachments)
+  if text and text ~= "" then
+    if text:match("^!") or EXIT_COMMANDS[vim.trim(text)] then
+      -- Not something to queue; handle it as an ordinary send.
+      return self:send(text, attachments)
+    end
+    local message = prepare(text, attachments)
+    if not message then
+      return false
+    end
+    self:enqueue(message)
+  end
+  if #self.queue == 0 then
+    vim.notify("claude-code: nothing to send", vim.log.levels.INFO)
+    return false
+  end
+  if self.shell then
+    -- finish_shell sends the queue once the command is gone (unless Claude is busy too).
+    self:kill_shell()
+  end
+  if self.busy and self:running() then
+    -- settle (or finish_turn) sends the queue once the interrupted turn ends.
+    self:interrupt_turn()
+  else
+    self:flush_queue()
+  end
+  return true
+end
+
+---@private
+function Session:kill_shell()
+  self.shell.killed = true
+  self.shell.job:kill("sigterm")
+end
+
+---@private
+function Session:interrupt_turn()
   if self.busy and self:running() then
     self.interrupted = true
     self.chat:set_status({ activity = "Interrupting" })
     self.sidecar:send({ type = "interrupt" })
   end
+end
+
+--- Stop what you're waiting on: a running `!command` first, else Claude's turn.
+--- Anything queued goes back to the prompt rather than out without you.
+function Session:interrupt()
+  self:return_queue()
+  if self.shell then
+    self:kill_shell()
+    return
+  end
+  self:interrupt_turn()
 end
 
 --- Handled by the plugin itself rather than Claude Code.
@@ -722,6 +866,7 @@ function Session:on_sdk_message(msg)
   end
   if msg.type == "system" and msg.subtype == "session_state_changed" then
     -- Claude Code's own account of whether a turn is running, whatever started it.
+    self.state_events = true
     if msg.state == "running" then
       self:begin_turn()
     elseif msg.state == "idle" then
@@ -991,19 +1136,20 @@ end
 
 --- Claude Code went idle: nothing running or queued. A turn's result normally ended
 --- it already; this ends the ones that don't produce a result we count (a context-only
---- message still reports "running" first).
+--- message still reports "running" first). Either way, it's when the queue goes out:
+--- sent any earlier (on the result), this idle would arrive after it and end its turn.
 ---@private
 function Session:settle()
-  if not self.busy then
-    return
+  if self.busy then
+    self.busy = false
+    self.interrupted = false
+    for _, note in ipairs(self.notes) do
+      self.chat.transcript:note(note)
+    end
+    self.notes = {}
+    self.chat:set_status({ activity = nil })
   end
-  self.busy = false
-  self.interrupted = false
-  for _, note in ipairs(self.notes) do
-    self.chat.transcript:note(note)
-  end
-  self.notes = {}
-  self.chat:set_status({ activity = nil })
+  self:flush_queue()
 end
 
 --- A message from another session reached Claude.
@@ -1101,6 +1247,10 @@ function Session:finish_turn(msg)
   self.busy = false
   self.interrupted = false
   self.chat:set_status({ activity = nil, cost = self.cost })
+  if not self.state_events then
+    -- A CLI without session_state_changed: the result is all there is to go on.
+    self:flush_queue()
+  end
 
   if not self.persisted then
     -- The transcript exists now: apply a rename made before the first turn, and

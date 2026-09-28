@@ -27,6 +27,7 @@ the defaults with `vim.tbl_deep_extend("force", …)`, so a partial table only o
   keymaps = {                -- set any entry to false to disable it
     submit = { n = "<CR>", i = { "<C-CR>", "<C-s>" } }, -- <C-CR> needs a terminal that reports it (Ghostty, kitty, WezTerm, …)
     interrupt = "<C-c>",     -- normal mode, transcript and prompt
+    send_now = "<M-CR>",     -- prompt: interrupt Claude and send the queued messages now
     close = "q",             -- normal mode, transcript
     toggle_tool = { "<Tab>", "<CR>" }, -- normal mode, transcript: expand/collapse tool output (off a tool call: open link)
     open_link = "gx",        -- normal mode, transcript: open the link under the cursor
@@ -131,7 +132,8 @@ chat only; the plugin creates no global mappings.
 | Option | Default | Where | Does |
 |---|---|---|---|
 | `keymaps.submit` | `{ n = "<CR>", i = { "<C-CR>", "<C-s>" } }` | Prompt | Send the prompt |
-| `keymaps.interrupt` | `"<C-c>"` | Transcript and prompt, normal | Stop the turn in progress |
+| `keymaps.interrupt` | `"<C-c>"` | Transcript and prompt, normal | Stop the turn in progress. [Queued messages](@/usage.md#queueing-messages) go back to the prompt |
+| `keymaps.send_now` | `"<M-CR>"` | Prompt | Interrupt Claude and send the queued messages, with the prompt's text, right away |
 | `keymaps.close` | `"q"` | Transcript, normal | Hide the chat |
 | `keymaps.toggle_tool` | `{ "<Tab>", "<CR>" }` | Transcript, normal | Expand/collapse tool output, or an edit's diff; elsewhere, open the link under the cursor |
 | `keymaps.open_link` | `"gx"` | Transcript, normal | Open the link under the cursor: URLs in the browser, files in the editor, Mermaid diagrams rendered in the browser |

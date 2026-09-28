@@ -16,6 +16,11 @@ local welcome = require("claude-code.ui.welcome")
 local images = require("claude-code.images")
 local events = require("claude-code.events")
 
+local queue_ns = api.nvim_create_namespace("claude-code.queue")
+
+--- The queue preview above the prompt: at most this many lines per message, and in all.
+local QUEUE_LINES_EACH, QUEUE_LINES_MAX = 3, 8
+
 --- Prompt buffer -> chat, for pastes of image paths (see install_paste_hook).
 ---@type table<integer, claude_code.Chat>
 local prompts = {}
@@ -66,6 +71,8 @@ end
 ---@field id integer
 ---@field on_submit fun(text: string, attachments: { label: string, image: claude_code.Image }[]): boolean Returns false to keep the prompt text.
 ---@field on_interrupt fun()
+---@field on_send_now? fun(text: string, attachments: { label: string, image: claude_code.Image }[]): boolean Interrupt and send the queue with this text; false keeps the prompt text.
+---@field on_edit_queue? fun(): boolean Pull the queue back into the prompt; false if nothing was queued.
 ---@field session_id? fun(): string? Claude session id, recorded with history entries.
 ---@field title? string
 ---@field cwd? string The session's working directory, shown in the winbar.
@@ -86,6 +93,7 @@ end
 ---@field private augroup integer
 ---@field private slash claude_code.SlashMenu
 ---@field private in_place? { restore?: integer } Shown in a window it took over (`:Claude here`); what to give it back.
+---@field private queued string[] Texts of the messages queued while Claude works, shown above the prompt.
 local Chat = {}
 Chat.__index = Chat
 
@@ -102,7 +110,7 @@ end
 ---@return claude_code.Chat
 function Chat.new(opts)
   require("claude-code.ui.highlights").setup()
-  local self = setmetatable({ opts = opts, status = {}, frame = 1, title = opts.title }, Chat)
+  local self = setmetatable({ opts = opts, status = {}, frame = 1, title = opts.title, queued = {} }, Chat)
   self.transcript = Transcript.new(("claude://session/%d"):format(opts.id))
   self.prompt = Prompt.new(("claude://prompt/%d"):format(opts.id), function()
     self:layout()
@@ -440,23 +448,114 @@ function Chat:show(show_opts)
   end
 end
 
---- Fit the dock and float to the prompt text and the dock's current size.
+--- The messages queued while Claude works changed.
+---@param items { text: string }[]
+function Chat:set_queue(items)
+  self.queued = vim.tbl_map(function(item)
+    return item.text
+  end, items)
+  self:layout()
+end
+
+--- Queued messages coming back for editing: into the prompt, ahead of what's there.
+---@param items { text: string, attachments: { label: string, image: claude_code.Image }[] }[]
+function Chat:restore_queue(items)
+  self.prompt:restore(items)
+  self:layout()
+end
+
+--- Lines previewing the queue (as the CLI shows queued messages above its input), each
+--- a list of chunks, wrapped to `width`.
+---@private
+---@param width integer
+---@return claude_code.Chunk[][]
+function Chat:queue_rows(width)
+  if #self.queued == 0 then
+    return {}
+  end
+  local keys = config.options.keymaps
+  local hints = { "↑ edit" }
+  local send_now = config.keys(keys.send_now)[1]
+  if send_now then
+    table.insert(hints, icons.key(send_now) .. " send now")
+  end
+  local rows = {
+    {
+      { " Queued", "ClaudeCodeQueuedTitle" },
+      { (" · %s"):format(table.concat(hints, " · ")), "ClaudeCodeMuted" },
+    },
+  }
+  local card = require("claude-code.ui.card")
+  local body, hidden = {}, 0
+  for _, text in ipairs(self.queued) do
+    local lines = card.wrap(text, math.max(width - 4, 10))
+    for i, line in ipairs(lines) do
+      if #body >= QUEUE_LINES_MAX then
+        hidden = hidden + (#lines - i + 1)
+        break
+      elseif i > QUEUE_LINES_EACH then
+        table.insert(body, { { "   …", "ClaudeCodeQueued" } })
+        break
+      end
+      table.insert(body, { { (i == 1 and " › " or "   ") .. line, "ClaudeCodeQueued" } })
+    end
+  end
+  if hidden > 0 then
+    -- The last line shown makes way for the count, so it's one of the hidden ones.
+    hidden = hidden + 1
+    body[#body] = { { ("   … %d more line%s"):format(hidden, hidden == 1 and "" or "s"), "ClaudeCodeQueued" } }
+  end
+  return vim.list_extend(rows, body)
+end
+
+--- Write the queue preview into the dock, above where the prompt floats.
+---@private
+---@param rows claude_code.Chunk[][]
+function Chat:render_queue(rows)
+  if not api.nvim_buf_is_valid(self.dock) then
+    return
+  end
+  local lines = vim.tbl_map(function(row)
+    return table.concat(vim.tbl_map(function(chunk)
+      return chunk[1]
+    end, row))
+  end, rows)
+  api.nvim_buf_set_lines(self.dock, 0, -1, false, lines)
+  api.nvim_buf_clear_namespace(self.dock, queue_ns, 0, -1)
+  for i, row in ipairs(rows) do
+    local col = 0
+    for _, chunk in ipairs(row) do
+      api.nvim_buf_set_extmark(self.dock, queue_ns, i - 1, col, { end_col = col + #chunk[1], hl_group = chunk[2] })
+      col = col + #chunk[1]
+    end
+  end
+end
+
+--- Fit the dock and float to the prompt text, the queue, and the dock's current size.
 function Chat:layout()
   local wins = self:windows()
   if not (wins.dock and wins.prompt) then
     return
   end
+  local rows = self:queue_rows(api.nvim_win_get_width(wins.dock))
+  self:render_queue(rows)
   local height = self.prompt:height(wins.prompt)
-  if api.nvim_win_get_height(wins.dock) ~= height + 2 then
-    api.nvim_win_set_height(wins.dock, height + 2)
+  if api.nvim_win_get_height(wins.dock) ~= #rows + height + 2 then
+    api.nvim_win_set_height(wins.dock, #rows + height + 2)
   end
+  local dock_height = api.nvim_win_get_height(wins.dock)
+  -- If the editor is too short for all of it, the prompt wins over the preview.
+  local offset = math.max(math.min(#rows, dock_height - height - 2), 0)
+  api.nvim_win_call(wins.dock, function()
+    vim.fn.winrestview({ topline = 1 })
+  end)
   api.nvim_win_set_config(wins.prompt, {
     relative = "win",
     win = wins.dock,
-    row = 0,
+    row = offset,
     col = 0,
     width = math.max(api.nvim_win_get_width(wins.dock) - 2, 1),
-    height = math.min(height, math.max(api.nvim_win_get_height(wins.dock) - 2, 1)),
+    height = math.min(height, math.max(dock_height - offset - 2, 1)),
   })
   self.slash:refresh()
   self:render_status()
@@ -570,6 +669,19 @@ function Chat:submit()
   end
 end
 
+--- Interrupt Claude and send the queue, with whatever is in the prompt, right away.
+function Chat:send_now()
+  if not self.opts.on_send_now then
+    return
+  end
+  local text = self.prompt:text()
+  if self.opts.on_send_now(text, self.prompt:attachments_in(text)) and text ~= "" then
+    require("claude-code.history").add(text, self.opts.session_id and self.opts.session_id())
+    self.prompt:clear()
+    self:layout()
+  end
+end
+
 --- Attach an image file to the prompt.
 ---@param path string
 function Chat:attach_image(path)
@@ -625,8 +737,18 @@ function Chat:apply_keymaps()
   -- recall earlier prompts when the cursor is on the first/last line.
   for _, dir in ipairs({ { "<Up>", -1 }, { "<Down>", 1 } }) do
     map(self.prompt.buf, { "n", "i" }, dir[1], function()
+      local on_first_line = api.nvim_win_get_cursor(0)[1] == 1
       if self.slash:open() then
         self.slash:move(dir[2])
+      elseif
+        dir[2] < 0
+        and on_first_line
+        and not self.prompt:browsing()
+        and self.opts.on_edit_queue
+        and self.opts.on_edit_queue()
+      then
+        -- Pulled the queue back into the prompt to edit, as the CLI's ↑ does.
+        return
       elseif not self.prompt:recall(dir[2]) then
         api.nvim_feedkeys(api.nvim_replace_termcodes(dir[1], true, false, true), "n", false)
       end
@@ -634,6 +756,11 @@ function Chat:apply_keymaps()
   end
   for _, buf in ipairs({ self.prompt.buf, self.transcript.buf }) do
     map(buf, "n", keys.interrupt, interrupt, "interrupt")
+  end
+  for _, lhs in ipairs(config.keys(keys.send_now)) do
+    map(self.prompt.buf, { "n", "i" }, lhs, function()
+      self:send_now()
+    end, "interrupt and send the queue now")
   end
   map(self.transcript.buf, "n", keys.close, function()
     self:hide()
@@ -751,6 +878,9 @@ function Chat:render_status()
   end
 
   local info = {}
+  if #self.queued > 0 then
+    table.insert(info, ("%d queued"):format(#self.queued))
+  end
   if s.held and s.held > 0 then
     table.insert(info, ("%s %d waiting"):format(icons.get().message, s.held))
   end
@@ -786,6 +916,10 @@ function Chat:render_status()
   table.insert(hints, "↑↓ history")
   if keys.interrupt and s.activity then
     table.insert(hints, icons.key(keys.interrupt) .. " interrupt")
+  end
+  local send_now = config.keys(keys.send_now)[1]
+  if send_now and s.activity and (#self.queued > 0 or not self.prompt:empty()) then
+    table.insert(hints, icons.key(send_now) .. " send now")
   end
   -- Bottom edge: permission mode on the left (as the CLI shows it under its
   -- input), key hints on the right.
