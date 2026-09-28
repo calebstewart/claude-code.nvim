@@ -33,7 +33,7 @@ local M = {}
 ---@field interrupt string|false Interrupt the turn in progress (normal mode, both windows).
 ---@field close string|false Hide the chat (normal mode, transcript window).
 ---@field toggle_tool string|string[]|false Expand/collapse the tool call under the cursor, or open the link under it (normal mode, transcript window).
----@field open_link string|string[]|false Open the link under the cursor: URLs in the browser, files in the editor (normal mode, transcript window).
+---@field open_link string|string[]|false Open the link under the cursor: URLs in the browser, files in the editor, mermaid blocks rendered in the browser (normal mode, transcript window).
 ---@field click_link string|string[]|false Mouse click that opens the link clicked in the transcript (from the transcript or prompt).
 ---@field cycle_mode string|false Cycle the permission mode: default -> accept edits -> plan (prompt, both modes).
 ---@field paste_image string|false Paste an image from the clipboard into the prompt (insert mode).

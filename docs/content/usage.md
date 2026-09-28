@@ -20,6 +20,10 @@ border shows what Claude is doing, the model, and the session cost.
   prompt; keymaps follow the buffer the cursor is in, so from another window you get Neovim's usual
   Ctrl+click. (On macOS, some terminals turn Ctrl+click into a right-click; set
   [`keymaps.click_link`](@/configuration.md#keymaps) to another click, such as `"<2-LeftMouse>"`.)
+- The same keys on a Mermaid diagram (a ` ```mermaid ` code block, which Claude sometimes draws) open it in
+  your browser, rendered. The block is written to a local HTML page under Neovim's cache directory that loads
+  mermaid.js from a CDN, so the diagram stays on your machine but the page needs network access for the
+  script. The block's label shows the key as a reminder.
 - `:q` in any of the chat's windows closes the whole sidebar. The session keeps running.
 - `:Claude here` opens the chat in the current window instead of a sidebar, so `nvim +"Claude here"` gives
   you a Neovim that is just Claude — `:q` in the chat then quits. Switching sessions stays in that window,

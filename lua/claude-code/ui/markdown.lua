@@ -62,7 +62,13 @@ local function code_block(buf, node, top, bot)
     end
   end
   if lang and srow + 1 <= erow and srow + 1 >= top and srow + 1 <= bot then
-    mark(buf, srow + 1, 0, { virt_text = { { " " .. lang .. " ", "ClaudeCodeCodeLang" } }, virt_text_pos = "right_align" })
+    local label = lang
+    -- Mermaid blocks open in the browser from the link key; say so.
+    local key = lang:lower() == "mermaid" and config.keys(config.options.keymaps.open_link)[1]
+    if key then
+      label = ("%s · %s to view"):format(lang, key)
+    end
+    mark(buf, srow + 1, 0, { virt_text = { { " " .. label .. " ", "ClaudeCodeCodeLang" } }, virt_text_pos = "right_align" })
   end
 end
 

@@ -229,12 +229,19 @@ end
 
 --- Open the link under the cursor in the transcript: URLs with the system handler
 --- (`vim.ui.open`), files and directories in the editor window beside the chat.
+--- Inside a mermaid code block, the diagram opens in the browser instead.
 ---@param opts? { quiet?: boolean } Say nothing when there's no link under the cursor.
 ---@return boolean opened
 function Chat:open_link(opts)
   local links = require("claude-code.ui.links")
+  local mermaid = require("claude-code.ui.mermaid")
   local win = api.nvim_get_current_win()
   local row, col = unpack(api.nvim_win_get_cursor(win))
+  local diagram = mermaid.at(self.transcript.buf, row - 1, col)
+  if diagram then
+    mermaid.open(diagram)
+    return true
+  end
   local target, explicit = links.at(self.transcript.buf, row - 1, col)
   local file = target and links.file(target, self.opts.cwd or vim.fn.getcwd())
   local url = target and not file and explicit and links.url(target)

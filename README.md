@@ -143,6 +143,8 @@ doing, the model and the session cost.
   covers markdown links (even with the destination concealed), reference links, bare URLs and bare file
   paths, relative to the session's directory. Ctrl+click works while the cursor is in the chat (transcript or
   prompt); mappings follow the cursor's buffer, so from another window it's Neovim's usual Ctrl+click.
+- The same keys on a ` ```mermaid ` block open the diagram in the browser: a local HTML page that loads
+  mermaid.js from a CDN (the diagram stays in the file; the page needs network access for the script).
 - `:q` in any of the chat's windows closes the whole sidebar; the session keeps running.
 - `:Claude here` opens the chat in the current window instead of a sidebar, so `nvim +"Claude here"` gives
   you a Neovim that's just Claude (`:q` in the chat then quits). Switching sessions stays in that window, and

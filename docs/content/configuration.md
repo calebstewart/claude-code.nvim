@@ -134,7 +134,7 @@ chat only; the plugin creates no global mappings.
 | `keymaps.interrupt` | `"<C-c>"` | Transcript and prompt, normal | Stop the turn in progress |
 | `keymaps.close` | `"q"` | Transcript, normal | Hide the chat |
 | `keymaps.toggle_tool` | `{ "<Tab>", "<CR>" }` | Transcript, normal | Expand/collapse tool output, or an edit's diff; elsewhere, open the link under the cursor |
-| `keymaps.open_link` | `"gx"` | Transcript, normal | Open the link under the cursor: URLs in the browser, files in the editor |
+| `keymaps.open_link` | `"gx"` | Transcript, normal | Open the link under the cursor: URLs in the browser, files in the editor, Mermaid diagrams rendered in the browser |
 | `keymaps.click_link` | `"<C-LeftMouse>"` | Transcript and prompt | Open the link clicked in the transcript |
 | `keymaps.cycle_mode` | `"<S-Tab>"` | Transcript and prompt | Cycle default → accept edits → plan → auto |
 | `keymaps.paste_image` | `"<C-v>"` | Prompt, insert | Paste an image from the clipboard |
