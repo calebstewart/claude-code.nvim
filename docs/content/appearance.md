@@ -106,6 +106,8 @@ All groups are prefixed `ClaudeCode`. The prefix is omitted in the table below.
 | `CodeLang` | The language tag on a code block |
 | `Bullet` | List bullets |
 | `Quote` | Blockquote bars |
+| `TableBorder` | Table borders and column separators |
+| `TableHeader` | Table header cells |
 
 ### Chrome
 
@@ -171,7 +173,9 @@ require("lualine").setup({
 The transcript is an append-only markdown buffer. Headers, tool status, output and footers are drawn as
 extmarks, so the buffer's *text* stays plain markdown — which means other markdown renderers work on it.
 
-The built-in decoration (shaded code blocks, bullets, rules, quote bars) is
+Tables are drawn as aligned grids over the text Claude wrote, so yanking one still gives you its markdown.
+
+The built-in decoration (shaded code blocks, bullets, rules, quote bars, tables) is
 [`markdown.enabled`](@/configuration.md#markdown-enabled). Turn it off if you use
 [render-markdown.nvim](https://github.com/MeanderingProgrammer/render-markdown.nvim) or similar, so the two
 don't both draw.

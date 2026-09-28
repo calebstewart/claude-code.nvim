@@ -35,7 +35,7 @@ the defaults with `vim.tbl_deep_extend("force", …)`, so a partial table only o
     paste_image = "<C-v>",   -- prompt, insert mode: paste an image from the clipboard
   },
   icons = "nerd",            -- "nerd" (needs a Nerd Font) | "unicode"
-  markdown = { enabled = true }, -- shaded code blocks, bullets, rules, quote bars; disable if you use render-markdown.nvim
+  markdown = { enabled = true }, -- shaded code blocks, bullets, rules, quote bars, tables; disable if you use render-markdown.nvim
   tool_output = { max_lines = 40 }, -- cap for expanded tool output
   history = { share = true }, -- share prompt history with the Claude Code CLI (~/.claude/history.jsonl)
   sessions = {
@@ -164,7 +164,7 @@ glyphs any font has.
 ### markdown.enabled
 
 `boolean`, default `true`. The transcript's built-in decoration: shaded code blocks, bullets, horizontal
-rules and quote bars. Turn it off if you render the transcript with something else, such as
+rules, quote bars and tables drawn as aligned grids. Turn it off if you render the transcript with something else, such as
 [render-markdown.nvim](https://github.com/MeanderingProgrammer/render-markdown.nvim) — the transcript is a
 plain markdown buffer, so other renderers work on it. See [Appearance](@/appearance.md).
 

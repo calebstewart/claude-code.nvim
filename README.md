@@ -109,7 +109,7 @@ Defaults:
     paste_image = "<C-v>",   -- prompt, insert mode: paste an image from the clipboard
   },
   icons = "nerd",            -- "nerd" (needs a Nerd Font) | "unicode"
-  markdown = { enabled = true }, -- shaded code blocks, bullets, rules, quote bars; disable if you use render-markdown.nvim
+  markdown = { enabled = true }, -- shaded code blocks, bullets, rules, quote bars, tables; disable if you use render-markdown.nvim
   tool_output = { max_lines = 40 }, -- cap for expanded tool output
   history = { share = true }, -- share prompt history with the Claude Code CLI (~/.claude/history.jsonl)
   sessions = {
@@ -281,7 +281,7 @@ Neovim (Lua) ─────┤
   buffer; headers, tool status, output and footers are extmarks so the text stays plain markdown), `prompt.lua`,
   `permission.lua` (permission cards), `question.lua` (question dialog), `sessions.lua` (session picker, on
   `listing.lua`, which the neo-tree source in `neo-tree/` shares),
-  `input.lua`, `markdown.lua` (decoration provider), `tools.lua`, `welcome.lua`, `icons.lua` and
+  `input.lua`, `markdown.lua` (decoration provider), `tables.lua` (aligned tables), `tools.lua`, `welcome.lua`, `icons.lua` and
   `highlights.lua`.
 
 The Agent SDK normally brings its own platform-specific Claude binary, which can't be bundled into a single

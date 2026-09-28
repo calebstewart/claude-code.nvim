@@ -39,7 +39,7 @@ which is why installing the plugin needs no build step.
 **UI** (`lua/claude-code/ui/`) — `chat.lua` (layout, keymaps, status), `transcript.lua` (the append-only
 markdown buffer), `prompt.lua`, `permission.lua`, `question.lua`, `held.lua` (messages from other sessions
 awaiting delivery), `card.lua` (the bordered cards both draw), `sessions.lua` (the picker), `slash.lua`,
-`plan.lua`, `tools.lua`, `input.lua`, `markdown.lua`, `welcome.lua`, `icons.lua` and `highlights.lua`.
+`plan.lua`, `tools.lua`, `input.lua`, `markdown.lua`, `tables.lua`, `welcome.lua`, `icons.lua` and `highlights.lua`.
 
 The control methods are `list_sessions`, `list_projects`, `get_messages`, `get_session_info`,
 `rename_session` and `delete_session`. `list_projects` has no Agent SDK counterpart, so `control.ts`

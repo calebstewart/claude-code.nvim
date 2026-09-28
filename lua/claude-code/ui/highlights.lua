@@ -83,6 +83,8 @@ local function apply()
     ClaudeCodeCodeLang = { fg = muted, bg = blend(fg, bg, 0.06), italic = true },
     ClaudeCodeBullet = { fg = claude },
     ClaudeCodeQuote = { fg = muted },
+    ClaudeCodeTableBorder = { fg = blend(fg, bg, 0.3) },
+    ClaudeCodeTableHeader = { bold = true },
     -- Chrome
     ClaudeCodeMuted = { fg = muted },
     ClaudeCodeError = { fg = err },

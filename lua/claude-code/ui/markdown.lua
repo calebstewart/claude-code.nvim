@@ -1,5 +1,6 @@
 -- Lightweight markdown styling for the transcript: shaded code blocks with a
--- language label, bullet glyphs, full-width rules and quote bars. It runs as a
+-- language label, bullet glyphs, full-width rules and quote bars (tables are
+-- in tables.lua). It runs as a
 -- decoration provider, so it only touches visible rows and keeps up with
 -- streaming text without any bookkeeping.
 
@@ -86,6 +87,7 @@ end
 ---@param buf integer
 function M.attach(buf)
   attached[buf] = true
+  require("claude-code.ui.tables").attach(buf)
   api.nvim_create_autocmd("BufWipeout", {
     buffer = buf,
     callback = function()

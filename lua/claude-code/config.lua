@@ -11,7 +11,7 @@ local M = {}
 ---@field window claude_code.WindowConfig
 ---@field keymaps claude_code.KeymapConfig
 ---@field icons "nerd"|"unicode" Glyph set; "nerd" needs a Nerd Font.
----@field markdown { enabled: boolean } Built-in styling for code blocks, lists, rules and quotes in the transcript.
+---@field markdown { enabled: boolean } Built-in styling for code blocks, lists, rules, quotes and tables in the transcript.
 ---@field tool_output { max_lines: integer } Line cap for expanded tool output.
 ---@field history { share: boolean } Share prompt history with the Claude Code CLI (~/.claude/history.jsonl).
 ---@field sessions { idle_timeout: integer|false } Minutes before an idle background session's process is stopped (it resumes on demand).
