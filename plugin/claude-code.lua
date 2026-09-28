@@ -31,6 +31,9 @@ local subcommands = {
   rename = function(args)
     require("claude-code").rename(args)
   end,
+  relocate = function(args)
+    require("claude-code").relocate(args)
+  end,
   mode = function(args)
     require("claude-code").mode(args)
   end,
@@ -65,6 +68,9 @@ end, {
   complete = function(arg_lead, line)
     if line:match("^%S+%s+image%s+") then
       return vim.fn.getcompletion(arg_lead, "file")
+    end
+    if line:match("^%S+%s+relocate%s+") then
+      return vim.fn.getcompletion(arg_lead, "dir")
     end
     if line:match("^%S+%s+mode%s+%S*$") then
       return vim.tbl_filter(function(mode)

@@ -22,6 +22,11 @@ local SMALL_LINE = 8192
 --- Entry properties that carry session metadata, mapped to the accumulator key
 --- they land on. Last occurrence wins, so a session reports its latest title and
 --- the branch it ended on.
+---
+--- `cwd` is not among them: a session's directory is the one it started in (the
+--- one its transcript is filed under), even if it later moved into a worktree,
+--- unless a `relocated` entry says it has been moved. That's how the SDK and the
+--- CLI read it too.
 local METADATA = {
   customTitle = "custom_title",
   aiTitle = "ai_title",
@@ -29,7 +34,7 @@ local METADATA = {
   summary = "summary_hint",
   tag = "tag",
   gitBranch = "git_branch",
-  cwd = "cwd",
+  relocatedCwd = "relocated_cwd",
 }
 
 --- Entrypoints belonging to programmatic sessions rather than an interactive CLI.
@@ -179,6 +184,7 @@ local function scan(path)
             acc[key] = entry[property]
           end
         end
+        acc.cwd = acc.cwd or entry.cwd
         if not acc.created_at and entry.timestamp then
           acc.created_at = epoch_ms(entry.timestamp)
         end
@@ -189,9 +195,8 @@ local function scan(path)
       end
     else
       -- A big entry: pull out just the two fields worth having from it.
-      local cwd = line:match('"cwd":"(.-)"')
-      if cwd then
-        acc.cwd = cwd
+      if not acc.cwd then
+        acc.cwd = line:match('"cwd":"(.-)"')
       end
       local branch = line:match('"gitBranch":"(.-)"')
       if branch then
@@ -226,7 +231,7 @@ local function session_info(session_id, path, mtime, dir)
     customTitle = custom_title,
     firstPrompt = first_prompt,
     gitBranch = trimmed(acc.git_branch),
-    cwd = trimmed(acc.cwd) or dir,
+    cwd = trimmed(acc.relocated_cwd) or trimmed(acc.cwd) or dir,
     tag = trimmed(acc.tag),
     createdAt = acc.created_at,
     -- Not part of SDKSessionInfo; kept so callers can reach the file, and so
@@ -362,14 +367,36 @@ function M.list_sessions(opts)
   return sessions
 end
 
---- The working directory a transcript records, from its first entries.
+--- The last JSON string property `key` in `text`, decoded.
+---@param text string
+---@param key string
+---@return string?
+local function last_string(text, key)
+  local raw
+  for match in text:gmatch('"' .. key .. '":"(.-[^\\])"') do
+    raw = match
+  end
+  local ok, decoded = pcall(vim.json.decode, raw and ('"' .. raw .. '"') or "")
+  return ok and type(decoded) == "string" and decoded or nil
+end
+
+--- The working directory a transcript records: where a `relocated` entry near
+--- its end moved it, else the one its first entries give.
 ---@param path string
 ---@return string?
 local function transcript_cwd(path)
-  local file = io.open(path, "r")
+  local file = io.open(path, "rb")
   if not file then
     return nil
   end
+  local size = file:seek("end")
+  file:seek("set", math.max(0, size - 65536))
+  local relocated = last_string(file:read("*a") or "", "relocatedCwd")
+  if relocated then
+    file:close()
+    return relocated
+  end
+  file:seek("set", 0)
   local cwd
   local lines = 0
   for line in file:lines() do
@@ -435,19 +462,27 @@ function M.list_projects()
   return projects
 end
 
---- Locate a session's transcript.
+--- Locate a session's transcript. `opts.dir` is where to look first; when the
+--- transcript isn't filed under it (the directory is gone, or the session moved
+--- into a worktree), every project is searched, since session ids are unique.
 ---@param session_id string
 ---@param opts? { dir?: string }
 ---@return string? path, string? cwd
 function M.find_transcript(session_id, opts)
   opts = opts or {}
-  for _, root in ipairs(search_roots(opts)) do
-    local path = root.dir .. "/" .. session_id .. ".jsonl"
-    if vim.uv.fs_stat(path) then
-      return path, root.cwd
+  local function search(roots)
+    for _, root in ipairs(roots) do
+      local path = root.dir .. "/" .. session_id .. ".jsonl"
+      if vim.uv.fs_stat(path) then
+        return path, root.cwd
+      end
     end
   end
-  return nil
+  local path, cwd = search(search_roots(opts))
+  if not path and opts.dir then
+    path, cwd = search(search_roots({}))
+  end
+  return path, cwd
 end
 
 ---@param session_id string
@@ -588,6 +623,53 @@ function M.rename_session(session_id, title, opts)
     return false, tostring(write_err)
   end
   return true
+end
+
+--- Move a session to another working directory, the way the CLI relocates one
+--- whose directory changes: its transcript (and its subagents' transcripts) move
+--- to the project directory for `to`, and a `relocated` entry records the new
+--- directory, which is then the session's cwd. For sessions whose directory was
+--- deleted or moved.
+---@param session_id string
+---@param to string An existing directory.
+---@param opts? { dir?: string } Where the session is now, if known.
+---@return string? cwd The new working directory (`to`, resolved), or nil on failure.
+---@return string? err
+function M.relocate_session(session_id, to, opts)
+  local cwd = vim.uv.fs_realpath(vim.fs.normalize(to))
+  if not cwd or vim.fn.isdirectory(cwd) == 0 then
+    return nil, "not a directory: " .. to
+  end
+  local path = M.find_transcript(session_id, opts)
+  if not path then
+    return nil, "session not found: " .. session_id
+  end
+  local dest_dir = M.project_dir(cwd)
+  local dest = dest_dir .. "/" .. session_id .. ".jsonl"
+  if dest ~= path then
+    if vim.uv.fs_stat(dest) then
+      return nil, "a transcript for this session already exists at " .. dest
+    end
+    if vim.fn.mkdir(dest_dir, "p") == 0 then
+      return nil, "couldn't create " .. dest_dir
+    end
+    local ok, err = vim.uv.fs_rename(path, dest)
+    if not ok then
+      return nil, ("couldn't move %s: %s"):format(path, err)
+    end
+    local subagents = path:gsub("%.jsonl$", "")
+    if vim.fn.isdirectory(subagents) == 1 then
+      -- Best effort, as in the CLI: the conversation itself has already moved.
+      vim.uv.fs_rename(subagents, dest_dir .. "/" .. session_id)
+    end
+  end
+  local file, err = io.open(dest, "ab")
+  if not file then
+    return nil, tostring(err)
+  end
+  file:write(vim.json.encode({ type = "relocated", sessionId = session_id, relocatedCwd = cwd }) .. "\n")
+  file:close()
+  return cwd
 end
 
 --- Delete a session: its transcript and the directory holding its subagents'

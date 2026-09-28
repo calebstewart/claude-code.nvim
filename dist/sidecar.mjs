@@ -36634,7 +36634,7 @@ function iie(e, t) {
 }
 
 // src/control.ts
-import { open as open3, readdir as readdir3, stat as stat2 } from "node:fs/promises";
+import { appendFile, mkdir as mkdir3, open as open3, readdir as readdir3, realpath as realpath3, rename as rename3, stat as stat2 } from "node:fs/promises";
 import { homedir } from "node:os";
 import { join as join5 } from "node:path";
 
@@ -36660,9 +36660,21 @@ function onLines(handle2, onClose, onInvalid) {
 }
 
 // src/control.ts
+function projectsRoot() {
+  return join5(process.env.CLAUDE_CONFIG_DIR ?? join5(homedir(), ".claude"), "projects");
+}
+function projectDir(cwd) {
+  return join5(projectsRoot(), cwd.replace(/[^a-zA-Z0-9]/g, "-"));
+}
 async function transcriptCwd(path) {
   const file = await open3(path, "r");
   try {
+    const { size } = await file.stat();
+    const tail = await file.read({ buffer: Buffer.alloc(65536), position: Math.max(0, size - 65536) });
+    const relocated = [
+      ...tail.buffer.subarray(0, tail.bytesRead).toString("utf8").matchAll(/"relocatedCwd":"((?:[^"\\]|\\.)*)"/g)
+    ].pop();
+    if (relocated) return JSON.parse(`"${relocated[1]}"`);
     const { buffer, bytesRead } = await file.read({ buffer: Buffer.alloc(65536), position: 0 });
     const match = /"cwd":"((?:[^"\\]|\\.)*)"/.exec(buffer.subarray(0, bytesRead).toString("utf8"));
     return match ? JSON.parse(`"${match[1]}"`) : void 0;
@@ -36672,8 +36684,60 @@ async function transcriptCwd(path) {
     await file.close();
   }
 }
+async function findTranscript(sessionId2) {
+  const root = projectsRoot();
+  let names;
+  try {
+    names = await readdir3(root);
+  } catch {
+    return void 0;
+  }
+  for (const name of names) {
+    const path = join5(root, name, `${sessionId2}.jsonl`);
+    try {
+      if ((await stat2(path)).isFile()) return path;
+    } catch {
+    }
+  }
+  return void 0;
+}
+async function withFallback(dir, fn2, missing) {
+  try {
+    const result = await fn2(dir);
+    if (!dir || !missing(result)) return result;
+  } catch (err) {
+    if (!dir || !(err instanceof Error && /not found/i.test(err.message))) throw err;
+  }
+  return fn2(void 0);
+}
+async function relocateSession(sessionId2, to2) {
+  let cwd;
+  try {
+    cwd = await realpath3(to2);
+    if (!(await stat2(cwd)).isDirectory()) throw new Error();
+  } catch {
+    throw new Error(`not a directory: ${to2}`);
+  }
+  const path = await findTranscript(sessionId2);
+  if (!path) throw new Error(`session not found: ${sessionId2}`);
+  const destDir = projectDir(cwd);
+  const dest = join5(destDir, `${sessionId2}.jsonl`);
+  if (dest !== path) {
+    const exists = await stat2(dest).then(
+      () => true,
+      () => false
+    );
+    if (exists) throw new Error(`a transcript for this session already exists at ${dest}`);
+    await mkdir3(destDir, { recursive: true, mode: 448 });
+    await rename3(path, dest);
+    await rename3(path.replace(/\.jsonl$/, ""), join5(destDir, sessionId2)).catch(() => {
+    });
+  }
+  await appendFile(dest, JSON.stringify({ type: "relocated", sessionId: sessionId2, relocatedCwd: cwd }) + "\n");
+  return { cwd };
+}
 async function listProjects() {
-  const root = join5(process.env.CLAUDE_CONFIG_DIR ?? join5(homedir(), ".claude"), "projects");
+  const root = projectsRoot();
   let names;
   try {
     names = await readdir3(root);
@@ -36720,17 +36784,29 @@ async function dispatch(request) {
       return listProjects();
     case "get_messages": {
       const { session_id, dir, tail } = request.params;
-      const messages = await NQt(session_id, { dir });
+      const messages = await withFallback(
+        dir,
+        (d2) => NQt(session_id, { dir: d2 }),
+        (m) => m.length === 0
+      );
       return { total: messages.length, messages: tail ? messages.slice(-tail) : messages };
     }
-    case "get_session_info":
-      return await UQt(request.params.session_id, { dir: request.params.dir }) ?? null;
-    case "rename_session":
-      await FQt(request.params.session_id, request.params.title, { dir: request.params.dir });
+    case "get_session_info": {
+      const { session_id, dir } = request.params;
+      return await withFallback(dir, (d2) => UQt(session_id, { dir: d2 }), (i) => i === void 0) ?? null;
+    }
+    case "rename_session": {
+      const { session_id, title, dir } = request.params;
+      await withFallback(dir, (d2) => FQt(session_id, title, { dir: d2 }), () => false);
       return null;
-    case "delete_session":
-      await zQt(request.params.session_id, { dir: request.params.dir });
+    }
+    case "delete_session": {
+      const { session_id, dir } = request.params;
+      await withFallback(dir, (d2) => zQt(session_id, { dir: d2 }), () => false);
       return null;
+    }
+    case "relocate_session":
+      return relocateSession(request.params.session_id, request.params.to);
     default:
       throw new Error(`Unknown method: ${request.method}`);
   }

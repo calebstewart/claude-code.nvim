@@ -169,6 +169,13 @@ export type ControlRequest =
     }
   | { type: "request"; id: number; method: "rename_session"; params: { session_id: string; title: string; dir?: string } }
   | { type: "request"; id: number; method: "delete_session"; params: { session_id: string; dir?: string } }
+  | {
+      type: "request";
+      id: number;
+      /** Move a session to working directory `to`; answers `{ cwd }`, the resolved directory. */
+      method: "relocate_session";
+      params: { session_id: string; to: string; dir?: string };
+    }
   | { type: "request"; id: number; method: "get_session_info"; params: { session_id: string; dir?: string } };
 
 export interface ControlResponse {

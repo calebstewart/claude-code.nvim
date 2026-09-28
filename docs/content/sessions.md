@@ -88,6 +88,16 @@ Resuming a session from disk redraws its conversation — the last 200 messages.
 > If a session is still open in another Claude Code process, resuming it warns you, since both would be
 > writing to the same transcript.
 
+### Moved or deleted directories
+
+A session runs in the directory it was started in. If that directory is gone (a removed worktree, a deleted
+scratch directory), Claude can't start there. Opening the session still shows its conversation, but instead
+of starting Claude it asks where to move the session: Neovim's cwd, or another directory. `:Claude relocate
+[dir]` does the same at any time. The session's transcript moves to the new directory's project, the way the
+CLI moves a session whose directory changes, so it resumes there from then on.
+
+Deleting such a session works as usual.
+
 ## Names
 
 A new session's name is saved to disk after its first turn, and unnamed sessions pick up Claude Code's

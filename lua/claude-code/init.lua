@@ -115,6 +115,26 @@ function M.rename(name)
   })
 end
 
+--- Move the current session to another working directory, e.g. when the one it
+--- ran in was deleted. With no directory, asks for one.
+---@param dir? string
+function M.relocate(dir)
+  local s = sessions.current()
+  if not s then
+    vim.notify("claude-code: no current session", vim.log.levels.WARN)
+    return
+  end
+  if dir and dir ~= "" then
+    s:relocate(dir)
+    return
+  end
+  vim.ui.input({ prompt = "Move session to: ", default = vim.fn.getcwd() .. "/", completion = "dir" }, function(text)
+    if text and vim.trim(text) ~= "" then
+      s:relocate(text)
+    end
+  end)
+end
+
 --- Set the current session's permission mode. With no mode, pick one.
 ---@param mode? string
 function M.mode(mode)

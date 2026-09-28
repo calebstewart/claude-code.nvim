@@ -1,5 +1,5 @@
--- Session bookkeeping for the picker: list, read, rename and delete transcripts,
--- without starting a Claude process.
+-- Session bookkeeping for the picker: list, read, rename, relocate and delete
+-- transcripts, without starting a Claude process.
 --
 -- With `transport = "direct"` this reads `~/.claude/projects` from Lua. With
 -- `transport = "sidecar"` it asks `sidecar.mjs --control`, which does the same
@@ -71,6 +71,12 @@ local function locally(method, params)
       return nil, err
     end
     return vim.NIL
+  elseif method == "relocate_session" then
+    local cwd, err = store.relocate_session(params.session_id, params.to, { dir = params.dir })
+    if not cwd then
+      return nil, err
+    end
+    return { cwd = cwd }
   elseif method == "delete_session" then
     local ok, err = store.delete_session(params.session_id, { dir = params.dir })
     if not ok then
@@ -83,7 +89,7 @@ end
 
 --- Call a control method. `callback` runs on the main loop, as it does for the
 --- sidecar, so callers can treat both paths identically.
----@param method "list_sessions"|"list_projects"|"get_messages"|"get_session_info"|"rename_session"|"delete_session"
+---@param method "list_sessions"|"list_projects"|"get_messages"|"get_session_info"|"rename_session"|"relocate_session"|"delete_session"
 ---@param params table
 ---@param callback fun(err?: string, result?: any)
 function M.request(method, params, callback)

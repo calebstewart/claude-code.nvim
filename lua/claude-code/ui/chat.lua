@@ -57,7 +57,7 @@ end
 ---@field attention? string|false Waiting on the user (a permission card or question); shown in the border.
 ---@field model? string
 ---@field cost? number Session cost in USD.
----@field stopped? "suspended"|"ended"|false Not running: suspended while idle, or exited.
+---@field stopped? "suspended"|"ended"|"no_cwd"|false Not running: suspended while idle, exited, or its working directory is gone.
 ---@field mode? string Permission mode.
 ---@field background? integer Background agents still running.
 ---@field held? integer Messages from other sessions waiting for you to deliver them.
@@ -330,6 +330,16 @@ end
 function Chat:set_title(title)
   self.title = title
   events.sessions_changed()
+  local win = self:windows().transcript
+  if win then
+    vim.wo[win][0].winbar = self:winbar()
+  end
+end
+
+--- The session moved to another working directory.
+---@param cwd string
+function Chat:set_cwd(cwd)
+  self.opts.cwd = cwd
   local win = self:windows().transcript
   if win then
     vim.wo[win][0].winbar = self:winbar()
@@ -723,8 +733,13 @@ function Chat:render_status()
   local border_hl = "ClaudeCodePromptBorder"
   local left ---@type claude_code.Chunk[]
   if s.stopped and not s.activity then
-    local text = s.stopped == "suspended" and " Suspended · resumes when you send " or " Not running · resumes when you send "
-    left = { { text, "ClaudeCodeMuted" } }
+    if s.stopped == "no_cwd" then
+      left = { { " Working directory is gone · :Claude relocate ", "DiagnosticWarn" } }
+    else
+      local text = s.stopped == "suspended" and " Suspended · resumes when you send "
+        or " Not running · resumes when you send "
+      left = { { text, "ClaudeCodeMuted" } }
+    end
   elseif s.attention then
     border_hl = "ClaudeCodePromptAttention"
     left = { { " " .. icons.get().permission .. " " .. s.attention .. " ", "ClaudeCodePromptAttention" } }

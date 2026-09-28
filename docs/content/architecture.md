@@ -42,8 +42,8 @@ awaiting delivery), `card.lua` (the bordered cards both draw), `sessions.lua` (t
 `plan.lua`, `tools.lua`, `input.lua`, `markdown.lua`, `tables.lua`, `welcome.lua`, `icons.lua` and `highlights.lua`.
 
 The control methods are `list_sessions`, `list_projects`, `get_messages`, `get_session_info`,
-`rename_session` and `delete_session`. `list_projects` has no Agent SDK counterpart, so `control.ts`
-implements it directly, mirroring the Lua store.
+`rename_session`, `relocate_session` and `delete_session`. `list_projects` and `relocate_session` have no
+Agent SDK counterpart, so `control.ts` implements them directly, mirroring the Lua store.
 
 > [!NOTE]
 > The Agent SDK normally brings its own platform-specific Claude binary, which can't be bundled into a

@@ -19,6 +19,7 @@ after `image`, and mode names after `mode`.
 | `:Claude sessions` | Pick a session to switch to or resume |
 | `:Claude new [name]` | Start a new session (asks for a name if none is given; leave it empty for none) |
 | `:Claude rename [name]` | Rename the current session (asks if no name is given) |
+| `:Claude relocate [dir]` | Move the current session to another working directory (asks if none is given). See [moved directories](@/sessions.md#moved-or-deleted-directories) |
 | `:Claude next` / `:Claude prev` | Cycle through the sessions open in this Neovim |
 | `:Claude mode [mode]` | Set the current session's permission mode (pick from a list if none is given) |
 | `:Claude image <path>` | Attach an image file to the prompt |
@@ -42,6 +43,7 @@ need arguments or conditions.
 | `sessions()` | Open the session picker |
 | `new(name?)` | Start a new session. With no name, asks for one |
 | `rename(name?)` | Rename the current session. With no name, asks for one |
+| `relocate(dir?)` | Move the current session to another working directory. With no directory, asks for one |
 | `mode(mode?)` | Set the permission mode. With no mode, pick one from a list |
 | `image(path)` | Attach an image file to the prompt, opening the chat if needed |
 | `deliver()` | Deliver the current session's held messages from other sessions |

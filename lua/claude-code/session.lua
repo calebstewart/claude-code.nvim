@@ -28,6 +28,7 @@ local transport = require("claude-code.transport")
 ---@field private shell? { job: vim.SystemObj, id: string, killed: boolean } A running `!command`.
 ---@field private shell_count integer
 ---@field private replay_shell? string Replaying: id of the `!command` awaiting its output.
+---@field private relocating? boolean Asking where to move it (its directory is gone).
 ---@field private silent_results integer Results still to come from context-only messages (they have no turn to finish).
 ---@field private subagents table<string, claude_code.Subagent> Agent/Task tool_use id -> its subagent.
 ---@field private child_parent table<string, string> A subagent's own tool_use id -> its Agent call.
@@ -249,8 +250,15 @@ function Session:needs_attention()
 end
 
 --- Start (or restart) the process, resuming the transcript if there is one.
+--- Not when its working directory is gone: Claude can't run there, and would
+--- fail with an error that doesn't say why. Offers to move the session instead.
 ---@private
 function Session:start()
+  if vim.fn.isdirectory(self.cwd) == 0 then
+    self.chat:set_status({ activity = nil, stopped = "no_cwd" })
+    self:offer_relocate()
+    return
+  end
   self.suspending = false
   local sidecar
   sidecar = transport.session().new({
@@ -291,6 +299,110 @@ function Session:start()
     inbound = config.options.messaging.inbound,
     prompt_suggestions = config.options.prompt_suggestions,
   })
+end
+
+--- Ask where to move a session whose working directory is gone.
+---@private
+function Session:offer_relocate()
+  if self.relocating then
+    return
+  end
+  self.relocating = true
+  local problem = ("“%s” can't start: its working directory %s no longer exists"):format(
+    self.title or "New session",
+    vim.fn.fnamemodify(self.cwd, ":~")
+  )
+  local here = vim.uv.cwd()
+  local choices = {}
+  if here and vim.fn.isdirectory(here) == 1 and here ~= self.cwd then
+    table.insert(choices, { label = "Neovim's cwd (" .. vim.fn.fnamemodify(here, ":~") .. ")", dir = here })
+  end
+  table.insert(choices, { label = "Another directory…" })
+  table.insert(choices, { label = "Leave it for now", cancel = true })
+  vim.ui.select(choices, {
+    prompt = problem .. ". Move it to",
+    format_item = function(choice)
+      return choice.label
+    end,
+  }, function(choice)
+    if not choice or choice.cancel then
+      self.relocating = false
+      vim.notify(("claude-code: %s. :Claude relocate <dir> moves it."):format(problem), vim.log.levels.WARN)
+      return
+    end
+    if choice.dir then
+      self.relocating = false
+      self:relocate(choice.dir)
+      return
+    end
+    local default = (here or vim.env.HOME) .. "/"
+    vim.ui.input({ prompt = "Move session to: ", default = default, completion = "dir" }, function(dir)
+      self.relocating = false
+      if dir and vim.trim(dir) ~= "" then
+        self:relocate(dir)
+      end
+    end)
+  end)
+end
+
+--- Move the session to another working directory, and start it there if it's
+--- showing. A stored session's transcript moves too (relocate_session in the
+--- store), so later resumes run there as well. A running session is stopped
+--- first: the CLI mustn't be writing the transcript while it moves.
+---@param dir string
+---@param done? fun(err?: string)
+function Session:relocate(dir, done)
+  done = done or function() end
+  local path = vim.fs.normalize(vim.fn.fnamemodify(vim.fn.expand(dir), ":p"))
+  local function fail(err)
+    vim.notify("claude-code: couldn't relocate the session: " .. err, vim.log.levels.ERROR)
+    done(err)
+  end
+  if vim.fn.isdirectory(path) == 0 then
+    return fail("not a directory: " .. dir)
+  end
+  if self.busy then
+    return fail("Claude is working; interrupt it first")
+  end
+  local function moved(cwd)
+    self.cwd = cwd
+    self.chat:set_cwd(cwd)
+    require("claude-code.events").sessions_changed()
+    if self.chat:visible() then
+      self:start()
+    else
+      self.chat:set_status({ stopped = "ended" })
+    end
+    done()
+  end
+  local function move()
+    if not self.persisted then
+      moved(vim.uv.fs_realpath(path) or path)
+      return
+    end
+    control.request("relocate_session", { session_id = self.id, dir = self.cwd, to = path }, function(err, result)
+      if err then
+        return fail(err)
+      end
+      moved(result.cwd)
+    end)
+  end
+  if not self:running() then
+    move()
+    return
+  end
+  self:stop()
+  local deadline = vim.uv.now() + 5000
+  local function when_stopped()
+    if not self:running() then
+      move()
+    elseif vim.uv.now() > deadline then
+      fail("Claude didn't exit")
+    else
+      vim.defer_fn(when_stopped, 50)
+    end
+  end
+  when_stopped()
 end
 
 --- Make sure the process is running (e.g. after being suspended).
@@ -335,6 +447,10 @@ function Session:run_shell(command)
   if self.shell then
     local key = require("claude-code.ui.icons").key(config.options.keymaps.interrupt or "<C-c>")
     vim.notify(("claude-code: a shell command is already running (%s stops it)"):format(key), vim.log.levels.WARN)
+    return false
+  end
+  if vim.fn.isdirectory(self.cwd) == 0 then
+    self:start() -- explains, and offers to move it
     return false
   end
   local transcript = self.chat.transcript
@@ -448,6 +564,9 @@ function Session:send(text, attachments)
     table.insert(shown, { label = a.label, image = a.image, sent = sent })
   end
   self:ensure_running()
+  if not self:running() then
+    return false -- couldn't start (its directory is gone); keep the prompt
+  end
   self.last_active = os.time()
   self.chat.prompt:suggest(nil)
   self.chat.transcript:user_message(text, shown)
@@ -1025,7 +1144,7 @@ function Session:load_history()
     self.chat.transcript:batch(function()
       self:replay(messages, result.total or 0)
     end)
-    if self:running() then
+    if self:running() or self.chat.status.stopped == "no_cwd" then
       self.chat:set_status({ activity = nil })
     else
       self.chat:set_status({ activity = nil, stopped = "suspended" })
