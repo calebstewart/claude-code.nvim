@@ -125,7 +125,7 @@ end
 ---@field on_show? fun() Called after the chat is shown (e.g. to present deferred cards).
 ---@field on_cycle_mode? fun() The cycle-mode key was pressed.
 ---@field commands? fun(): claude_code.SlashCommand[] Slash commands for completion.
----@field on_rebuild? fun(transcript: boolean) A deleted buffer was replaced; `transcript`: the transcript is new and empty.
+---@field on_rebuild? fun(transcript: boolean) A deleted buffer was replaced (`transcript`: the transcript, now empty).
 
 ---@class claude_code.Chat
 ---@field transcript claude_code.Transcript
@@ -142,7 +142,7 @@ end
 ---@field private in_place? { restore?: integer } Shown in a window it took over (`:Claude here`); what to give it back.
 ---@field private queued string[] Texts of the messages queued while Claude works, shown above the prompt.
 ---@field private locked table<integer, integer> Chat window -> the only buffer it may show.
----@field private recovery? { visible: boolean, in_place?: { win?: integer, restore?: integer } } A buffer was deleted; rebuilding is scheduled.
+---@field private recovery? { visible: boolean, in_place?: { win?: integer, restore?: integer } } Rebuild scheduled.
 ---@field private rebuilding? boolean
 ---@field private closing_windows? boolean Inside hide/detach: its own window closes aren't the user closing the chat.
 ---@field private wiped? boolean
