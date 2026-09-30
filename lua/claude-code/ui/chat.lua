@@ -57,6 +57,37 @@ local function install_paste_hook()
   end
 end
 
+--- Filetypes of the chat's split windows, which nothing else should open files in.
+local CHAT_FILETYPES = { "claude-code-chat", "claude-code-dock" }
+
+--- neo-tree opens files (and previews them) in the window you came from unless its
+--- filetype is in `open_files_do_not_replace_types`; a locked chat window would
+--- make that fail with E1513. neo-tree reads the list when it opens something and
+--- rebuilds it on every `setup()`, so add the chat's filetypes whenever a neo-tree
+--- window is entered rather than once.
+local function install_neo_tree_hook()
+  if vim.g.claude_code_neo_tree_hook then
+    return
+  end
+  vim.g.claude_code_neo_tree_hook = true
+  api.nvim_create_autocmd("BufEnter", {
+    group = api.nvim_create_augroup("claude-code.neo-tree-guard", { clear = true }),
+    callback = function(ev)
+      local neo_tree = package.loaded["neo-tree"]
+      if vim.bo[ev.buf].filetype ~= "neo-tree" or type(neo_tree) ~= "table" or type(neo_tree.config) ~= "table" then
+        return
+      end
+      local types = neo_tree.config.open_files_do_not_replace_types or {}
+      for _, ft in ipairs(CHAT_FILETYPES) do
+        if not vim.tbl_contains(types, ft) then
+          table.insert(types, ft)
+        end
+      end
+      neo_tree.config.open_files_do_not_replace_types = types
+    end,
+  })
+end
+
 ---@class claude_code.ChatStatus
 ---@field activity? string What Claude is doing; nil when idle.
 ---@field attention? string|false Waiting on the user (a permission card or question); shown in the border.
@@ -94,6 +125,7 @@ end
 ---@field private slash claude_code.SlashMenu
 ---@field private in_place? { restore?: integer } Shown in a window it took over (`:Claude here`); what to give it back.
 ---@field private queued string[] Texts of the messages queued while Claude works, shown above the prompt.
+---@field private locked table<integer, integer> Chat window -> the only buffer it may show.
 local Chat = {}
 Chat.__index = Chat
 
@@ -110,7 +142,7 @@ end
 ---@return claude_code.Chat
 function Chat.new(opts)
   require("claude-code.ui.highlights").setup()
-  local self = setmetatable({ opts = opts, status = {}, frame = 1, title = opts.title, queued = {} }, Chat)
+  local self = setmetatable({ opts = opts, status = {}, frame = 1, title = opts.title, queued = {}, locked = {} }, Chat)
   self.transcript = Transcript.new(("claude://session/%d"):format(opts.id))
   self.prompt = Prompt.new(("claude://prompt/%d"):format(opts.id), function()
     self:layout()
@@ -123,6 +155,7 @@ function Chat.new(opts)
   end)
   prompts[self.prompt.buf] = self
   install_paste_hook()
+  install_neo_tree_hook()
   self.dock = api.nvim_create_buf(false, true)
   vim.bo[self.dock].filetype = "claude-code-dock"
   self:apply_keymaps()
@@ -160,6 +193,34 @@ function Chat.new(opts)
           self:focus_prompt(false)
         end)
       end
+    end,
+  })
+  -- The chat's windows only ever show the chat. 'winfixbuf' stops `:edit`,
+  -- `:buffer` and nvim_win_set_buf; this catches whatever gets past it (code that
+  -- clears the option first): the chat goes back, the other buffer opens beside it.
+  api.nvim_create_autocmd("BufWinEnter", {
+    group = group,
+    callback = function(ev)
+      local win = api.nvim_get_current_win()
+      local want = self.locked[win]
+      if not want or ev.buf == want then
+        return
+      end
+      vim.schedule(function()
+        if self.locked[win] ~= want or not api.nvim_win_is_valid(win) or not api.nvim_buf_is_valid(want) then
+          return
+        end
+        local intruder = api.nvim_win_get_buf(win)
+        if intruder == want then
+          return
+        end
+        vim.wo[win].winfixbuf = false
+        api.nvim_win_set_buf(win, want)
+        vim.wo[win].winfixbuf = true
+        if api.nvim_buf_is_valid(intruder) then
+          self:show_in_editor(intruder)
+        end
+      end)
     end,
   })
   -- Some focus changes skip WinEnter (e.g. Neovim leaving a float at the end of
@@ -216,6 +277,26 @@ function Chat:editor_window()
     end
   end
   return editor
+end
+
+--- Pin `win` to `buf`: nothing else can be shown in it until `unlock`.
+---@private
+---@param win integer
+---@param buf integer
+function Chat:lock(win, buf)
+  self.locked[win] = buf
+  vim.wo[win].winfixbuf = true
+end
+
+--- Release the chat's windows, before closing them or handing one back.
+---@private
+function Chat:unlock()
+  for win in pairs(self.locked) do
+    if api.nvim_win_is_valid(win) then
+      vim.wo[win].winfixbuf = false
+    end
+  end
+  self.locked = {}
 end
 
 --- Show `buf` next to the chat: in the editor window beside it if there is one,
@@ -426,6 +507,9 @@ function Chat:show(show_opts)
     wo.wrap, wo.linebreak = true, true
     wo.winhighlight = "NormalFloat:ClaudeCodePrompt,FloatBorder:ClaudeCodePromptBorder"
   end
+  self:lock(wins.transcript, self.transcript.buf)
+  self:lock(wins.dock, self.dock)
+  self:lock(self.float, self.prompt.buf)
   self:layout()
   self:render_welcome()
   self:focus_prompt(true)
@@ -589,6 +673,7 @@ end
 ---@return claude_code.ChatShowOpts
 function Chat:detach()
   self.slash:close()
+  self:unlock()
   local wins = self:windows()
   local handoff = { win = wins.transcript, restore = self.in_place and self.in_place.restore }
   self.in_place = nil
@@ -605,6 +690,7 @@ end
 function Chat:hide(opts)
   opts = opts or {}
   self.slash:close()
+  self:unlock()
   local wins = self:windows()
   -- Closing the window you're typing in shouldn't leave you in insert mode elsewhere.
   local cur = api.nvim_get_current_win()
