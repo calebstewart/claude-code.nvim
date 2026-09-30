@@ -47,6 +47,7 @@ local transport = require("claude-code.transport")
 ---@field private cost number Cumulative session cost reported by the last result.
 ---@field private queue claude_code.QueuedMessage[] Prompts sent while Claude was working, delivered when the turn ends.
 ---@field private state_events boolean Claude Code reports session_state_changed (so idle, not the result, ends a turn).
+---@field private reload_pending? boolean The transcript was replaced mid-turn; reload the conversation when it ends.
 local Session = {}
 Session.__index = Session
 
@@ -209,6 +210,9 @@ function Session.new(opts)
     commands = function()
       return self:slash_commands()
     end,
+    on_rebuild = function(transcript)
+      self:on_chat_rebuilt(transcript)
+    end,
   })
   self.permissions = Permissions.new(self.chat, function(id, answer)
     if self.sidecar then
@@ -296,6 +300,7 @@ function Session:start()
       -- Nothing is left to deliver the queue after; give it back rather than lose it.
       self:return_queue()
       self.chat:set_status({ activity = nil, stopped = self.suspending and "suspended" or "ended" })
+      self:reload_if_pending()
       if code ~= 0 and not self.suspending then
         vim.notify(("claude-code: sidecar exited with code %d\n%s"):format(code, stderr), vim.log.levels.ERROR)
       end
@@ -1148,6 +1153,7 @@ function Session:settle()
     end
     self.notes = {}
     self.chat:set_status({ activity = nil })
+    self:reload_if_pending()
   end
   self:flush_queue()
 end
@@ -1247,6 +1253,7 @@ function Session:finish_turn(msg)
   self.busy = false
   self.interrupted = false
   self.chat:set_status({ activity = nil, cost = self.cost })
+  self:reload_if_pending()
   if not self.state_events then
     -- A CLI without session_state_changed: the result is all there is to go on.
     self:flush_queue()
@@ -1280,10 +1287,42 @@ local function hidden_user_text(text)
     or text:match("^Caveat: The messages below") ~= nil
 end
 
+--- The chat's buffers were deleted (`:bdelete`) and replaced with new ones: put
+--- back what they showed.
+---@private
+---@param transcript boolean The transcript is new and empty.
+function Session:on_chat_rebuilt(transcript)
+  if transcript then
+    if self.busy then
+      -- Replaying now would tangle with the turn still streaming in.
+      self.reload_pending = true
+      self.chat.transcript:note("The chat buffer was deleted; the conversation reloads when this turn ends")
+    elseif self.persisted then
+      self:load_history({ reload = true })
+    end
+  end
+  self.permissions:redraw()
+  self.held:render()
+end
+
+--- Reload a conversation whose transcript was replaced mid-turn, now the turn is over.
+---@private
+function Session:reload_if_pending()
+  if self.reload_pending and not self.busy then
+    self.reload_pending = false
+    self.chat.transcript:reset()
+    if self.persisted then
+      self:load_history({ reload = true })
+    end
+  end
+end
+
 --- Load the stored conversation into the transcript. The process starts when
 --- the session is shown (or on send).
 ---@private
-function Session:load_history()
+---@param opts? { reload?: boolean } Refilling a replaced transcript, not resuming.
+function Session:load_history(opts)
+  local reload = opts and opts.reload
   control.request("get_messages", { session_id = self.id, dir = self.cwd, tail = REPLAY_LIMIT }, function(err, result)
     if err or not result then
       vim.notify("claude-code: couldn't load session: " .. tostring(err), vim.log.levels.ERROR)
@@ -1292,8 +1331,11 @@ function Session:load_history()
     end
     local messages = require("claude-code.peer_history").merge(self.id, self.cwd, result.messages or {})
     self.chat.transcript:batch(function()
-      self:replay(messages, result.total or 0)
+      self:replay(messages, result.total or 0, reload)
     end)
+    if reload then
+      self.held:render()
+    end
     if self:running() or self.chat.status.stopped == "no_cwd" then
       self.chat:set_status({ activity = nil })
     else
@@ -1305,7 +1347,8 @@ end
 ---@private
 ---@param messages table[] SessionMessage[]
 ---@param total integer
-function Session:replay(messages, total)
+---@param reload? boolean
+function Session:replay(messages, total, reload)
   local transcript = self.chat.transcript
   if total > #messages then
     transcript:note(("%d earlier messages not shown"):format(total - #messages))
@@ -1387,7 +1430,9 @@ function Session:replay(messages, total)
   end
   transcript:cancel_pending_tools()
   self.in_reply, self.reply_has_text = false, false
-  transcript:note(("↻ Resumed · last active %s"):format(os.date("%b %d %H:%M", self.last_active)))
+  if not reload then
+    transcript:note(("↻ Resumed · last active %s"):format(os.date("%b %d %H:%M", self.last_active)))
+  end
 end
 
 return Session

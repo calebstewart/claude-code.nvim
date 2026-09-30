@@ -49,7 +49,7 @@ function Prompt.new(name, on_change, session_id)
 end
 
 function Prompt:valid()
-  return api.nvim_buf_is_valid(self.buf)
+  return api.nvim_buf_is_valid(self.buf) and api.nvim_buf_is_loaded(self.buf)
 end
 
 ---@return string

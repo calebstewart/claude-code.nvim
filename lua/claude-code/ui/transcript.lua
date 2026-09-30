@@ -65,7 +65,19 @@ function Transcript.new(name)
 end
 
 function Transcript:valid()
-  return api.nvim_buf_is_valid(self.buf)
+  return api.nvim_buf_is_valid(self.buf) and api.nvim_buf_is_loaded(self.buf)
+end
+
+--- Empty the transcript, to replay the conversation into it.
+function Transcript:reset()
+  if not self:valid() then
+    return
+  end
+  vim.bo[self.buf].modifiable = true
+  api.nvim_buf_set_lines(self.buf, 0, -1, false, {})
+  vim.bo[self.buf].modifiable = false
+  api.nvim_buf_clear_namespace(self.buf, -1, 0, -1)
+  self.tools, self.pending_break = {}, false
 end
 
 --- Nothing has been said yet.
