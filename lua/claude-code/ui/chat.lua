@@ -61,29 +61,44 @@ end
 local CHAT_FILETYPES = { "claude-code-chat", "claude-code-dock" }
 
 --- neo-tree opens files (and previews them) in the window you came from unless its
---- filetype is in `open_files_do_not_replace_types`; a locked chat window would
---- make that fail with E1513. neo-tree reads the list when it opens something and
---- rebuilds it on every `setup()`, so add the chat's filetypes whenever a neo-tree
---- window is entered rather than once.
-local function install_neo_tree_hook()
-  if vim.g.claude_code_neo_tree_hook then
+--- filetype is in `open_files_do_not_replace_types`. A locked chat window would
+--- make that fail with E1513, and a failed preview leaves neo-tree's `eventignore`
+--- behind. neo-tree rebuilds its config on the first use after every `setup()`,
+--- so this runs whenever the chat shows or a neo-tree window is entered.
+local function exclude_from_neo_tree()
+  local neo_tree = package.loaded["neo-tree"]
+  if type(neo_tree) ~= "table" then
     return
   end
-  vim.g.claude_code_neo_tree_hook = true
-  api.nvim_create_autocmd("BufEnter", {
-    group = api.nvim_create_augroup("claude-code.neo-tree-guard", { clear = true }),
-    callback = function(ev)
-      local neo_tree = package.loaded["neo-tree"]
-      if vim.bo[ev.buf].filetype ~= "neo-tree" or type(neo_tree) ~= "table" or type(neo_tree.config) ~= "table" then
-        return
+  -- Apply a pending `setup()` now, so the list isn't replaced after this.
+  local ok, cfg = pcall(neo_tree.ensure_config)
+  cfg = ok and type(cfg) == "table" and cfg or neo_tree.config
+  if type(cfg) ~= "table" then
+    return
+  end
+  local types = cfg.open_files_do_not_replace_types or {}
+  for _, ft in ipairs(CHAT_FILETYPES) do
+    if not vim.tbl_contains(types, ft) then
+      table.insert(types, ft)
+    end
+  end
+  cfg.open_files_do_not_replace_types = types
+end
+
+local neo_tree_hook = false
+local function install_neo_tree_hook()
+  if neo_tree_hook then
+    return
+  end
+  neo_tree_hook = true
+  local group = api.nvim_create_augroup("claude-code.neo-tree-guard", { clear = true })
+  api.nvim_create_autocmd("FileType", { group = group, pattern = "neo-tree", callback = exclude_from_neo_tree })
+  api.nvim_create_autocmd({ "BufEnter", "WinEnter" }, {
+    group = group,
+    callback = function()
+      if vim.bo.filetype == "neo-tree" then
+        exclude_from_neo_tree()
       end
-      local types = neo_tree.config.open_files_do_not_replace_types or {}
-      for _, ft in ipairs(CHAT_FILETYPES) do
-        if not vim.tbl_contains(types, ft) then
-          table.insert(types, ft)
-        end
-      end
-      neo_tree.config.open_files_do_not_replace_types = types
     end,
   })
 end
@@ -214,9 +229,9 @@ function Chat.new(opts)
         if intruder == want then
           return
         end
-        vim.wo[win].winfixbuf = false
+        api.nvim_set_option_value("winfixbuf", false, { scope = "local", win = win })
         api.nvim_win_set_buf(win, want)
-        vim.wo[win].winfixbuf = true
+        api.nvim_set_option_value("winfixbuf", true, { scope = "local", win = win })
         if api.nvim_buf_is_valid(intruder) then
           self:show_in_editor(intruder)
         end
@@ -263,7 +278,9 @@ function Chat:editor_window()
   local editor, best
   for _, win in ipairs(api.nvim_tabpage_list_wins(0)) do
     local is_chat = win == ours.transcript or win == ours.dock or win == ours.prompt
-    if not is_chat and api.nvim_win_get_config(win).relative == "" then
+    local buf = api.nvim_win_get_buf(win)
+    local special = vim.wo[win].winfixbuf or vim.bo[buf].buftype ~= "" or vim.bo[buf].filetype == "neo-tree"
+    if not is_chat and not special and api.nvim_win_get_config(win).relative == "" then
       local row, col = unpack(api.nvim_win_get_position(win))
       local score = ({
         right = col + api.nvim_win_get_width(win),
@@ -285,18 +302,19 @@ end
 ---@param buf integer
 function Chat:lock(win, buf)
   self.locked[win] = buf
-  vim.wo[win].winfixbuf = true
+  api.nvim_set_option_value("winfixbuf", true, { scope = "local", win = win })
 end
 
---- Release the chat's windows, before closing them or handing one back.
+--- Release the chat's windows in this tab, before closing them or handing one back.
 ---@private
-function Chat:unlock()
-  for win in pairs(self.locked) do
+---@param wins { transcript?: integer, dock?: integer, prompt?: integer }
+function Chat:unlock(wins)
+  for _, win in pairs(wins) do
+    self.locked[win] = nil
     if api.nvim_win_is_valid(win) then
-      vim.wo[win].winfixbuf = false
+      api.nvim_set_option_value("winfixbuf", false, { scope = "local", win = win })
     end
   end
-  self.locked = {}
 end
 
 --- Show `buf` next to the chat: in the editor window beside it if there is one,
@@ -510,6 +528,7 @@ function Chat:show(show_opts)
   self:lock(wins.transcript, self.transcript.buf)
   self:lock(wins.dock, self.dock)
   self:lock(self.float, self.prompt.buf)
+  exclude_from_neo_tree()
   self:layout()
   self:render_welcome()
   self:focus_prompt(true)
@@ -673,8 +692,8 @@ end
 ---@return claude_code.ChatShowOpts
 function Chat:detach()
   self.slash:close()
-  self:unlock()
   local wins = self:windows()
+  self:unlock(wins)
   local handoff = { win = wins.transcript, restore = self.in_place and self.in_place.restore }
   self.in_place = nil
   for _, key in ipairs({ "prompt", "dock" }) do
@@ -690,8 +709,8 @@ end
 function Chat:hide(opts)
   opts = opts or {}
   self.slash:close()
-  self:unlock()
   local wins = self:windows()
+  self:unlock(wins)
   -- Closing the window you're typing in shouldn't leave you in insert mode elsewhere.
   local cur = api.nvim_get_current_win()
   if cur == wins.prompt or cur == wins.transcript or cur == wins.dock then
@@ -876,6 +895,10 @@ function Chat:apply_keymaps()
       self:open_link()
     end, "open link")
   end
+  -- The transcript's window can't show a file, so `gf` opens it beside the chat.
+  map(self.transcript.buf, "n", "gf", function()
+    self:open_link()
+  end, "open file under cursor")
   -- Mappings belong to the buffer with the cursor, not the one clicked, so the
   -- click is also mapped in the prompt (where the cursor usually is).
   local click = function()
