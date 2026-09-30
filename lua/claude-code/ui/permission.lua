@@ -90,6 +90,14 @@ function Permissions:on_show()
   end
 end
 
+--- The transcript was replaced: draw the open request's card on the new one.
+function Permissions:redraw()
+  if self.card then
+    self.card = nil
+    self:render()
+  end
+end
+
 --- The session's process exited: outstanding requests can't be answered any more.
 function Permissions:clear()
   if #self.queue > 0 then

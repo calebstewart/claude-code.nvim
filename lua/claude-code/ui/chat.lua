@@ -125,6 +125,7 @@ end
 ---@field on_show? fun() Called after the chat is shown (e.g. to present deferred cards).
 ---@field on_cycle_mode? fun() The cycle-mode key was pressed.
 ---@field commands? fun(): claude_code.SlashCommand[] Slash commands for completion.
+---@field on_rebuild? fun(transcript: boolean) A deleted buffer was replaced; `transcript`: the transcript is new and empty.
 
 ---@class claude_code.Chat
 ---@field transcript claude_code.Transcript
@@ -141,6 +142,10 @@ end
 ---@field private in_place? { restore?: integer } Shown in a window it took over (`:Claude here`); what to give it back.
 ---@field private queued string[] Texts of the messages queued while Claude works, shown above the prompt.
 ---@field private locked table<integer, integer> Chat window -> the only buffer it may show.
+---@field private recovery? { visible: boolean, in_place?: { win?: integer, restore?: integer } } A buffer was deleted; rebuilding is scheduled.
+---@field private rebuilding? boolean
+---@field private closing_windows? boolean Inside hide/detach: its own window closes aren't the user closing the chat.
+---@field private wiped? boolean
 local Chat = {}
 Chat.__index = Chat
 
@@ -158,34 +163,28 @@ end
 function Chat.new(opts)
   require("claude-code.ui.highlights").setup()
   local self = setmetatable({ opts = opts, status = {}, frame = 1, title = opts.title, queued = {}, locked = {} }, Chat)
-  self.transcript = Transcript.new(("claude://session/%d"):format(opts.id))
-  self.prompt = Prompt.new(("claude://prompt/%d"):format(opts.id), function()
-    self:layout()
-  end, opts.session_id)
-  self.slash = require("claude-code.ui.slash").attach(self.prompt.buf, function()
-    return opts.commands and opts.commands() or {}
-  end, function()
-    -- <Tab> in an empty prompt takes the suggested next prompt.
-    return self.prompt:accept_suggestion()
-  end)
-  prompts[self.prompt.buf] = self
   install_paste_hook()
   install_neo_tree_hook()
-  self.dock = api.nvim_create_buf(false, true)
-  vim.bo[self.dock].filetype = "claude-code-dock"
-  self:apply_keymaps()
 
   local group = api.nvim_create_augroup(("claude-code.chat.%d"):format(opts.id), { clear = true })
   self.augroup = group
+  self:create_buffers()
   -- Closing any of the three windows closes the set.
   api.nvim_create_autocmd("WinClosed", {
     group = group,
     callback = function(ev)
       local closed = tonumber(ev.match)
+      if self.closing_windows then
+        return -- our own hide/detach closing the rest of the set
+      end
       local wins = self:windows()
       if closed and (closed == wins.transcript or closed == wins.dock or closed == wins.prompt) then
         vim.schedule(function()
-          self:hide({ closing = true })
+          -- A deleted buffer took the window with it: recover() tidies up instead,
+          -- without quitting when the chat's dock is all that's left.
+          if not self.recovery then
+            self:hide({ closing = true })
+          end
         end)
       end
     end,
@@ -222,7 +221,7 @@ function Chat.new(opts)
         return
       end
       vim.schedule(function()
-        if self.locked[win] ~= want or not api.nvim_win_is_valid(win) or not api.nvim_buf_is_valid(want) then
+        if self.locked[win] ~= want or not api.nvim_win_is_valid(win) or not api.nvim_buf_is_loaded(want) then
           return
         end
         local intruder = api.nvim_win_get_buf(win)
@@ -238,18 +237,117 @@ function Chat.new(opts)
       end)
     end,
   })
-  -- Some focus changes skip WinEnter (e.g. Neovim leaving a float at the end of
-  -- startup); starting to type in the dock is the other giveaway.
-  api.nvim_create_autocmd("InsertEnter", {
+  -- `:bdelete` / `:bwipeout` can't be refused, so a lost buffer is rebuilt instead.
+  api.nvim_create_autocmd({ "BufUnload", "BufWipeout" }, {
     group = group,
-    buffer = self.dock,
-    callback = function()
+    callback = function(ev)
+      if self.rebuilding or self.recovery or vim.v.exiting ~= vim.NIL then
+        return
+      end
+      if ev.buf ~= self.transcript.buf and ev.buf ~= self.prompt.buf and ev.buf ~= self.dock then
+        return
+      end
+      local wins = self:windows()
+      self.recovery = {
+        visible = wins.transcript ~= nil or wins.prompt ~= nil,
+        -- By BufUnload, Neovim may have closed the transcript's window already.
+        in_place = self.in_place and { win = wins.transcript, restore = self.in_place.restore },
+      }
       vim.schedule(function()
-        self:focus_prompt(true)
+        self:recover()
       end)
     end,
   })
   return self
+end
+
+--- Create whichever of the chat's buffers is missing (all of them, the first time).
+---@private
+---@return boolean transcript The transcript is new: what it showed is gone.
+function Chat:create_buffers()
+  local function missing(buf)
+    return not (buf and api.nvim_buf_is_valid(buf) and api.nvim_buf_is_loaded(buf))
+  end
+  -- An unloaded buffer is still around (and holds the name); drop it for good.
+  local function discard(buf)
+    if buf and api.nvim_buf_is_valid(buf) then
+      pcall(api.nvim_buf_delete, buf, { force = true })
+    end
+  end
+  local opts = self.opts
+  local new_transcript = missing(self.transcript and self.transcript.buf)
+  if new_transcript then
+    discard(self.transcript and self.transcript.buf)
+    self.transcript = Transcript.new(("claude://session/%d"):format(opts.id))
+  end
+  if missing(self.prompt and self.prompt.buf) then
+    if self.prompt then
+      prompts[self.prompt.buf] = nil
+      discard(self.prompt.buf)
+      self.slash:close()
+    end
+    self.prompt = Prompt.new(("claude://prompt/%d"):format(opts.id), function()
+      self:layout()
+    end, opts.session_id)
+    self.slash = require("claude-code.ui.slash").attach(self.prompt.buf, function()
+      return opts.commands and opts.commands() or {}
+    end, function()
+      -- <Tab> in an empty prompt takes the suggested next prompt.
+      return self.prompt:accept_suggestion()
+    end)
+    prompts[self.prompt.buf] = self
+  end
+  if missing(self.dock) then
+    discard(self.dock)
+    self.dock = api.nvim_create_buf(false, true)
+    vim.bo[self.dock].filetype = "claude-code-dock"
+    -- Some focus changes skip WinEnter (e.g. Neovim leaving a float at the end of
+    -- startup); starting to type in the dock is the other giveaway.
+    api.nvim_create_autocmd("InsertEnter", {
+      group = self.augroup,
+      buffer = self.dock,
+      callback = function()
+        vim.schedule(function()
+          self:focus_prompt(true)
+        end)
+      end,
+    })
+  end
+  self:apply_keymaps()
+  return new_transcript
+end
+
+--- One of the chat's buffers was deleted: make a new one, let the session refill
+--- the transcript, and show the chat again where it was.
+---@private
+function Chat:recover()
+  local state = self.recovery
+  self.recovery = nil
+  if not state or self.wiped then
+    return
+  end
+  self.rebuilding = true
+  -- Close what's left of the layout and release every window it had locked.
+  local wins = self:windows()
+  if wins.dock or wins.prompt then
+    self:hide()
+  end
+  self:unlock(vim.tbl_keys(self.locked))
+  local new_transcript = self:create_buffers()
+  self.rebuilding = false
+  if self.opts.on_rebuild then
+    self.opts.on_rebuild(new_transcript)
+  end
+  if state.visible then
+    local in_place = state.in_place
+    local win = in_place and in_place.win
+    if in_place and not (win and api.nvim_win_is_valid(win)) then
+      -- Neovim closed the window we'd taken over; take over the one left instead.
+      win = api.nvim_get_current_win()
+      win = api.nvim_win_get_config(win).relative == "" and win or nil
+    end
+    self:show(win and { win = win, restore = in_place.restore } or nil)
+  end
 end
 
 function Chat:valid()
@@ -696,11 +794,13 @@ function Chat:detach()
   self:unlock(wins)
   local handoff = { win = wins.transcript, restore = self.in_place and self.in_place.restore }
   self.in_place = nil
+  self.closing_windows = true
   for _, key in ipairs({ "prompt", "dock" }) do
     if wins[key] then
       pcall(api.nvim_win_close, wins[key], false)
     end
   end
+  self.closing_windows = false
   self.float = nil
   return handoff
 end
@@ -730,6 +830,7 @@ function Chat:hide(opts)
     return
   end
   self.in_place = nil
+  self.closing_windows = true
   -- Any of these may already be gone, so no ipairs (it stops at the first nil).
   for _, key in ipairs({ "prompt", "dock", "transcript" }) do
     local win = wins[key]
@@ -740,11 +841,13 @@ function Chat:hide(opts)
         if opts.closing then
           pcall(vim.cmd, "quit")
         else
-          vim.cmd("enew")
+          -- Not `:enew`: in the dock's window it would reuse the (empty, unnamed) dock.
+          api.nvim_win_set_buf(0, api.nvim_create_buf(true, false))
         end
       end)
     end
   end
+  self.closing_windows = false
   self.float = nil
 end
 
@@ -1075,6 +1178,7 @@ end
 
 --- Close the windows and delete the buffers, for a session that's being closed.
 function Chat:wipe()
+  self.wiped = true
   self:destroy()
   self:hide()
   pcall(api.nvim_del_augroup_by_id, self.augroup)
