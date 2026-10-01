@@ -5,7 +5,8 @@
 --   prompt      ...for the floating, bordered prompt laid over it
 --
 -- The dock means the float never hides transcript text, and ordinary window
--- commands (resize, close, move) keep working on the splits.
+-- commands (resize, close, move) keep working on the splits. Above the prompt,
+-- the dock also shows the running subagents and the queued messages.
 
 local api = vim.api
 local config = require("claude-code.config")
@@ -16,10 +17,13 @@ local welcome = require("claude-code.ui.welcome")
 local images = require("claude-code.images")
 local events = require("claude-code.events")
 
-local queue_ns = api.nvim_create_namespace("claude-code.queue")
+local dock_ns = api.nvim_create_namespace("claude-code.dock")
 
 --- The queue preview above the prompt: at most this many lines per message, and in all.
 local QUEUE_LINES_EACH, QUEUE_LINES_MAX = 3, 8
+
+--- The running subagents pinned above the prompt: at most this many rows of them.
+local AGENT_ROWS_MAX = 5
 
 --- Prompt buffer -> chat, for pastes of image paths (see install_paste_hook).
 ---@type table<integer, claude_code.Chat>
@@ -146,6 +150,8 @@ end
 ---@field private rebuilding? boolean
 ---@field private closing_windows? boolean Inside hide/detach: its own window closes aren't the user closing the chat.
 ---@field private wiped? boolean
+---@field private agent_lines table<integer, string> Dock line -> tool_use id of the running subagent shown there.
+---@field private agent_range? { first: integer, last: integer } Dock lines holding subagents, if any.
 local Chat = {}
 Chat.__index = Chat
 
@@ -162,7 +168,10 @@ end
 ---@return claude_code.Chat
 function Chat.new(opts)
   require("claude-code.ui.highlights").setup()
-  local self = setmetatable({ opts = opts, status = {}, frame = 1, title = opts.title, queued = {}, locked = {} }, Chat)
+  local self = setmetatable(
+    { opts = opts, status = {}, frame = 1, title = opts.title, queued = {}, locked = {}, agent_lines = {} },
+    Chat
+  )
   install_paste_hook()
   install_neo_tree_hook()
 
@@ -198,13 +207,14 @@ function Chat.new(opts)
       end
     end,
   })
-  -- The dock is only a placeholder; landing in it means "go to the prompt".
+  -- The dock is a placeholder, except for the running subagents pinned in it:
+  -- landing there picks one, landing anywhere else in it means "go to the prompt".
   api.nvim_create_autocmd("WinEnter", {
     group = group,
     callback = function()
       if api.nvim_get_current_buf() == self.dock then
         vim.schedule(function()
-          self:focus_prompt(false)
+          self:settle_dock()
         end)
       end
     end,
@@ -279,6 +289,9 @@ function Chat:create_buffers()
   if new_transcript then
     discard(self.transcript and self.transcript.buf)
     self.transcript = Transcript.new(("claude://session/%d"):format(opts.id))
+    self.transcript.on_agents = function()
+      self:layout()
+    end
   end
   if missing(self.prompt and self.prompt.buf) then
     if self.prompt then
@@ -301,6 +314,21 @@ function Chat:create_buffers()
     discard(self.dock)
     self.dock = api.nvim_create_buf(false, true)
     vim.bo[self.dock].filetype = "claude-code-dock"
+    vim.bo[self.dock].modifiable = false
+    api.nvim_create_autocmd("CursorMoved", {
+      group = self.augroup,
+      buffer = self.dock,
+      callback = function()
+        self:settle_dock()
+      end,
+    })
+    api.nvim_create_autocmd("WinLeave", {
+      group = self.augroup,
+      buffer = self.dock,
+      callback = function()
+        vim.wo.cursorline = false
+      end,
+    })
     -- Some focus changes skip WinEnter (e.g. Neovim leaving a float at the end of
     -- startup); starting to type in the dock is the other giveaway.
     api.nvim_create_autocmd("InsertEnter", {
@@ -709,10 +737,76 @@ function Chat:queue_rows(width)
   return vim.list_extend(rows, body)
 end
 
---- Write the queue preview into the dock, above where the prompt floats.
+--- Cut a row of chunks down to `width` display columns, ending it with "…" if it was longer.
+---@param row claude_code.Chunk[]
+---@param width integer
+---@return claude_code.Chunk[]
+local function fit(row, width)
+  local out, used = {}, 0
+  for _, chunk in ipairs(row) do
+    local w = vim.fn.strdisplaywidth(chunk[1])
+    if used + w > width then
+      local room = math.max(width - used - 1, 0)
+      local text = ""
+      for i = 1, vim.fn.strchars(chunk[1]) do
+        local next = vim.fn.strcharpart(chunk[1], 0, i)
+        if vim.fn.strdisplaywidth(next) > room then
+          break
+        end
+        text = next
+      end
+      table.insert(out, { text .. "…", chunk[2] })
+      return out
+    end
+    table.insert(out, chunk)
+    used = used + w
+  end
+  return out
+end
+
+--- Lines pinning the running subagents above the prompt, so what they're doing
+--- stays in sight however far the transcript has moved on. Also returns, for
+--- each row that is a subagent, its tool_use id.
+---@private
+---@param width integer
+---@return claude_code.Chunk[][] rows
+---@return table<integer, string> ids Row index -> tool_use id.
+function Chat:agent_rows(width)
+  local running = self.transcript:running_agents()
+  if #running == 0 then
+    return {}, {}
+  end
+  local tools = require("claude-code.ui.tools")
+  local jump = config.keys(config.options.keymaps.toggle_tool)[1]
+  local hint = jump and (" · ^W k, %s to show"):format(icons.key(jump)) or ""
+  local rows = { { { " Agents", "ClaudeCodeAgentsTitle" }, { hint, "ClaudeCodeMuted" } } }
+  local ids = {}
+  local shown = #running > AGENT_ROWS_MAX and AGENT_ROWS_MAX - 1 or #running
+  for i = 1, shown do
+    local sub = running[i].sub
+    local label = sub.description or sub.kind or "subagent"
+    if sub.background then
+      label = label .. " (background)"
+    end
+    local row = {
+      { " ● ", "ClaudeCodeToolPending" },
+      { label, "ClaudeCodeAgentsName" },
+      { " · " .. tools.subagent_activity(sub), "ClaudeCodeMuted" },
+    }
+    table.insert(rows, fit(row, width))
+    ids[#rows] = running[i].id
+  end
+  if shown < #running then
+    table.insert(rows, { { ("   … %d more"):format(#running - shown), "ClaudeCodeMuted" } })
+  end
+  return rows, ids
+end
+
+--- Write the pinned subagents and the queue preview into the dock, above where
+--- the prompt floats.
 ---@private
 ---@param rows claude_code.Chunk[][]
-function Chat:render_queue(rows)
+function Chat:render_dock(rows)
   if not api.nvim_buf_is_valid(self.dock) then
     return
   end
@@ -721,25 +815,71 @@ function Chat:render_queue(rows)
       return chunk[1]
     end, row))
   end, rows)
+  vim.bo[self.dock].modifiable = true
   api.nvim_buf_set_lines(self.dock, 0, -1, false, lines)
-  api.nvim_buf_clear_namespace(self.dock, queue_ns, 0, -1)
+  vim.bo[self.dock].modifiable = false
+  api.nvim_buf_clear_namespace(self.dock, dock_ns, 0, -1)
   for i, row in ipairs(rows) do
     local col = 0
     for _, chunk in ipairs(row) do
-      api.nvim_buf_set_extmark(self.dock, queue_ns, i - 1, col, { end_col = col + #chunk[1], hl_group = chunk[2] })
+      api.nvim_buf_set_extmark(self.dock, dock_ns, i - 1, col, { end_col = col + #chunk[1], hl_group = chunk[2] })
       col = col + #chunk[1]
     end
   end
 end
 
---- Fit the dock and float to the prompt text, the queue, and the dock's current size.
+--- With the cursor in the dock: keep it on a pinned subagent, or send it on to the
+--- prompt when there's none there (or it moved past them).
+---@private
+function Chat:settle_dock()
+  local win = api.nvim_get_current_win()
+  if api.nvim_win_get_buf(win) ~= self.dock then
+    return
+  end
+  local range = self.agent_range
+  local row = api.nvim_win_get_cursor(win)[1]
+  if not range or row > range.last + 1 then
+    self:focus_prompt(false)
+    return
+  end
+  vim.wo[win].cursorline = true
+  local clamped = math.min(math.max(row, range.first), range.last)
+  if clamped ~= row then
+    api.nvim_win_set_cursor(win, { clamped, 0 })
+  end
+end
+
+--- Jump to the Agent call of the subagent under the cursor in the dock, expanded.
+---@private
+function Chat:show_agent_at_cursor()
+  local id = self.agent_lines[api.nvim_win_get_cursor(0)[1]]
+  local win = self:windows().transcript
+  local row = id and win and self.transcript:expand_tool(id)
+  if not row then
+    return
+  end
+  api.nvim_set_current_win(win)
+  api.nvim_win_set_cursor(win, { row + 1, 0 })
+  vim.cmd("normal! zt")
+end
+
+--- Fit the dock and float to the prompt text, the pinned subagents, the queue, and
+--- the dock's current size.
 function Chat:layout()
   local wins = self:windows()
   if not (wins.dock and wins.prompt) then
     return
   end
-  local rows = self:queue_rows(api.nvim_win_get_width(wins.dock))
-  self:render_queue(rows)
+  local width = api.nvim_win_get_width(wins.dock)
+  local rows, ids = self:agent_rows(width)
+  self.agent_lines = ids
+  local first, last = math.huge, 0
+  for line in pairs(ids) do
+    first, last = math.min(first, line), math.max(last, line)
+  end
+  self.agent_range = last > 0 and { first = first, last = last } or nil
+  vim.list_extend(rows, self:queue_rows(width))
+  self:render_dock(rows)
   local height = self.prompt:height(wins.prompt)
   if api.nvim_win_get_height(wins.dock) ~= #rows + height + 2 then
     api.nvim_win_set_height(wins.dock, #rows + height + 2)
@@ -750,6 +890,10 @@ function Chat:layout()
   api.nvim_win_call(wins.dock, function()
     vim.fn.winrestview({ topline = 1 })
   end)
+  if api.nvim_get_current_win() == wins.dock then
+    -- The subagents under the cursor may have finished.
+    self:settle_dock()
+  end
   api.nvim_win_set_config(wins.prompt, {
     relative = "win",
     win = wins.dock,
@@ -974,9 +1118,49 @@ function Chat:apply_keymaps()
     self:hide()
   end, "hide chat")
   for _, lhs in ipairs({ "i", "a", "I", "A", "o", "O" }) do
-    map(self.transcript.buf, "n", lhs, function()
-      self:focus_prompt(true)
-    end, "focus prompt")
+    for _, buf in ipairs({ self.transcript.buf, self.dock }) do
+      map(buf, "n", lhs, function()
+        self:focus_prompt(true)
+      end, "focus prompt")
+    end
+  end
+  map(self.dock, "n", keys.interrupt, interrupt, "interrupt")
+  map(self.dock, "n", keys.close, function()
+    self:hide()
+  end, "hide chat")
+  for _, lhs in ipairs(config.keys(keys.toggle_tool)) do
+    map(self.dock, "n", lhs, function()
+      self:show_agent_at_cursor()
+    end, "show this agent in the transcript")
+  end
+  -- Moving off the ends of the pinned agents: down to the prompt, up to the transcript.
+  for _, move in ipairs({ { "j", 1 }, { "<Down>", 1 }, { "k", -1 }, { "<Up>", -1 } }) do
+    map(self.dock, "n", move[1], function()
+      local range, row = self.agent_range, api.nvim_win_get_cursor(0)[1]
+      local wins = self:windows()
+      if range and move[2] > 0 and row < range.last then
+        api.nvim_win_set_cursor(0, { row + 1, 0 })
+      elseif range and move[2] < 0 and row > range.first then
+        api.nvim_win_set_cursor(0, { row - 1, 0 })
+      elseif move[2] > 0 then
+        self:focus_prompt(false)
+      elseif wins.transcript then
+        api.nvim_set_current_win(wins.transcript)
+      end
+    end, move[2] > 0 and "next agent, or the prompt" or "previous agent, or the transcript")
+  end
+  -- A float's neighbours go by screen position, so from the prompt <C-w>k can land
+  -- in the editor beside the chat; go to what's above it here instead.
+  for _, lhs in ipairs({ "<C-w>k", "<C-w><C-k>", "<C-w><Up>" }) do
+    map(self.prompt.buf, "n", lhs, function()
+      local wins = self:windows()
+      if self.agent_range and wins.dock then
+        api.nvim_set_current_win(wins.dock)
+        api.nvim_win_set_cursor(wins.dock, { self.agent_range.first, 0 })
+      elseif wins.transcript then
+        api.nvim_set_current_win(wins.transcript)
+      end
+    end, "go to the agents above the prompt, or the transcript")
   end
   map(self.prompt.buf, "i", keys.paste_image, function()
     self:paste_image()

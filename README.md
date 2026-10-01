@@ -214,6 +214,10 @@ appear under its line and say which subagent is asking.
 Background subagents keep their line running after Claude moves on; the prompt's border shows how many are
 still running, and a note appears in the transcript when one finishes.
 
+While any subagent runs, it is also pinned above the prompt, one line each, so you can see what it's doing
+however far the transcript has scrolled. `<C-w>k` from the prompt (or `<C-w>j` from the transcript) moves
+onto them, and `<Tab>` jumps to that subagent's line in the transcript, expanded.
+
 ### Sessions
 
 Sessions are Claude Code's own, stored under `~/.claude/projects/`, so sessions started in the CLI show up here

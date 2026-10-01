@@ -82,3 +82,8 @@ Permission requests from a subagent appear under its line and say which subagent
 
 Background subagents keep their line running after Claude moves on. The prompt's border shows how many are
 still going, and a note appears in the transcript when one finishes.
+
+While any subagent runs, it is also pinned above the prompt, one line each, so you can see what it is doing
+however far the conversation has moved on. <kbd>C-w</kbd> <kbd>k</kbd> from the prompt (or
+<kbd>C-w</kbd> <kbd>j</kbd> from the transcript) moves onto them, and <kbd>Tab</kbd> jumps to that
+subagent's line in the transcript, expanded.

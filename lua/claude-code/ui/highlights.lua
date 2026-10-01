@@ -97,6 +97,8 @@ local function apply()
     ClaudeCodePlaceholder = { fg = muted, italic = true },
     ClaudeCodeQueued = { fg = muted, italic = true },
     ClaudeCodeQueuedTitle = { fg = claude },
+    ClaudeCodeAgentsTitle = { fg = claude },
+    ClaudeCodeAgentsName = { fg = fg, bold = true },
     ClaudeCodeBar = { link = "Normal" },
     -- The separator between the chat's own windows, kept on Normal's background
     -- so the rule vanishes while the pane's edge keeps the theme's colour.

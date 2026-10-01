@@ -30,6 +30,8 @@ local RULE = string.rep("─", 300)
 ---@field private pending_break boolean The next streamed text starts a new paragraph.
 ---@field private frame integer Spinner frame for pending tools.
 ---@field private quiet boolean Inside batch(): don't scroll after each write.
+---@field on_agents? fun() Called when the running subagents (or what they're doing) change.
+---@field private agents_dirty? boolean An on_agents call is already scheduled.
 local Transcript = {}
 Transcript.__index = Transcript
 
@@ -351,6 +353,9 @@ function Transcript:tool_result(id, status, result)
   entry.status = status
   entry.result = result
   entry.background = nil
+  if entry.subagent then
+    self:agents_changed()
+  end
   if entry.activity then
     api.nvim_buf_del_extmark(self.buf, ns, entry.activity)
     entry.activity = nil
@@ -405,6 +410,7 @@ function Transcript:subagent(id, sub)
   end
   entry.subagent = sub
   if entry.status == "pending" then
+    self:agents_changed()
     entry.activity = api.nvim_buf_set_extmark(self.buf, ns, row, 0, {
       id = entry.activity,
       virt_lines = {
@@ -453,6 +459,51 @@ function Transcript:toggle_tool_at(row)
     end
   end
   return false
+end
+
+--- Tell on_agents, once per batch of changes (replaying history makes many).
+---@private
+function Transcript:agents_changed()
+  if self.agents_dirty or not self.on_agents then
+    return
+  end
+  self.agents_dirty = true
+  vim.schedule(function()
+    self.agents_dirty = false
+    if self.on_agents and self:valid() then
+      self.on_agents()
+    end
+  end)
+end
+
+--- Subagents still at work (background ones included), in transcript order.
+---@return { id: string, sub: claude_code.Subagent }[]
+function Transcript:running_agents()
+  local running = {}
+  for id, entry in pairs(self.tools) do
+    local row = entry.subagent and entry.status == "pending" and self:tool_row(id)
+    if row then
+      table.insert(running, { id = id, sub = entry.subagent, row = row })
+    end
+  end
+  table.sort(running, function(a, b)
+    return a.row < b.row
+  end)
+  return vim.tbl_map(function(r)
+    return { id = r.id, sub = r.sub }
+  end, running)
+end
+
+--- Expand a tool call (if it isn't already) and return its row, to bring it into view.
+---@param id string tool_use id
+---@return integer? row
+function Transcript:expand_tool(id)
+  local entry = self.tools[id]
+  local row = self:tool_row(id)
+  if entry and row and not entry.body then
+    self:render_body(entry, row)
+  end
+  return row
 end
 
 --- Mark tool calls that never got a result (e.g. after an interrupt).
