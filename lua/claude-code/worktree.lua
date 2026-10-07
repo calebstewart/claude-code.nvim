@@ -268,11 +268,26 @@ function M.list(dir, callback, opts)
     end
     return result
   end
+  local running = in_flight[dir]
+  local joinable = running and running.generation == generation and running.at >= oldest
   if not callback then
+    -- Wait for a background `wt list` that will do rather than start another,
+    -- e.g. when a new session starts while its chat's winbar looks the tree up.
+    if joinable then
+      local joined
+      table.insert(running.callbacks, function(result)
+        joined = result
+      end)
+      vim.wait(5000, function()
+        return joined ~= nil
+      end, 5)
+      if joined then
+        return joined
+      end
+    end
     return store(M.run({ "list" }, { cwd = dir }) --[[@as claude_code.WtResult]])
   end
-  local running = in_flight[dir]
-  if running and running.generation == generation and running.at >= oldest then
+  if joinable then
     table.insert(running.callbacks, callback)
     return nil
   end
