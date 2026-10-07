@@ -181,9 +181,32 @@ function M.current_or_new()
   return M.current() or M.new()
 end
 
---- End a session and remove it from Neovim (its transcript stays on disk).
+--- Give up the `wt` tree a closed session holds, if any (in the background).
+--- Suspending doesn't come here, and neither does quitting Neovim: a claim made
+--- with Neovim's pid (see worktree.session_env) ends with it.
+---@param session claude_code.Session
+local function release_tree(session)
+  local worktree = require("claude-code.worktree")
+  -- An untouched placeholder has never run a prompt, so it can't have claimed one.
+  if not worktree.enabled() or session:is_placeholder() then
+    return
+  end
+  worktree.release_session(session.id, function(name, failed)
+    if failed then
+      local what = name and ("worktree %s"):format(name) or "its worktree"
+      vim.notify(
+        ("claude-code: couldn't release %s for “%s”: %s"):format(what, session.title or "New session", failed.error),
+        vim.log.levels.WARN
+      )
+    end
+  end)
+end
+
+--- End a session and remove it from Neovim (its transcript stays on disk), and
+--- release its `wt` tree.
 ---@param session claude_code.Session
 function M.close(session)
+  release_tree(session)
   session:stop()
   session.chat:wipe()
   for i, s in ipairs(live) do

@@ -11,6 +11,7 @@ local control = require("claude-code.control")
 local modes = require("claude-code.modes")
 local tools = require("claude-code.ui.tools")
 local transport = require("claude-code.transport")
+local worktree = require("claude-code.worktree")
 
 ---@class claude_code.Session
 ---@field id string Claude session id (chosen up front for new sessions).
@@ -40,6 +41,7 @@ local transport = require("claude-code.transport")
 ---@field private held claude_code.Held Messages from other sessions awaiting delivery.
 ---@field private messaging boolean Has messaged, or been messaged by, another session: kept running while idle so replies reach it.
 ---@field private suspending boolean
+---@field private env? table<string, string> Extra environment the running process was started with (see environment()).
 ---@field private pending_title? string Rename to apply once the transcript exists.
 ---@field private in_reply boolean The current turn already has a "Claude" header.
 ---@field private reply_has_text boolean
@@ -308,6 +310,7 @@ function Session:start()
   })
   self.sidecar = sidecar
   self.started_mode = self.mode
+  self.env = self:environment()
   self.chat:set_status({ activity = self.busy and "Thinking" or "Starting", stopped = false, mode = self.mode })
   sidecar:start({
     type = "init",
@@ -322,29 +325,39 @@ function Session:start()
     name = self.named and self.title or nil,
     inbound = config.options.messaging.inbound,
     prompt_suggestions = config.options.prompt_suggestions,
-    env = self:environment(),
+    env = self.env,
   })
 end
 
---- Extra environment for the process, from the `env` option. Worked out on
---- every start, so a function sees the session as it is now (its cwd may have
---- moved) and a restart after an idle suspend picks up any change.
+--- Extra environment for the process: with the worktree integration on, the
+--- session's `wt` identity and, in a tree, the tree's environment; then the
+--- `env` option, which wins over both. Worked out on every start, so a function
+--- sees the session as it is now (its cwd may have moved) and a restart after an
+--- idle suspend picks up any change.
 ---@private
 ---@return table<string, string>?
 function Session:environment()
+  local out = {}
+  if worktree.enabled() then
+    local err
+    out, err = worktree.session_env(self.id, self.cwd)
+    if err then
+      vim.notify("claude-code: starting without the worktree's environment: " .. err, vim.log.levels.WARN)
+    end
+  end
   local env = config.options.env
   if type(env) == "function" then
     local ok, result = pcall(env, { session_id = self.id, cwd = self.cwd, title = self.title })
     if not ok then
       vim.notify("claude-code: `env` failed: " .. tostring(result), vim.log.levels.ERROR)
-      return nil
+      env = nil
+    else
+      env = result
     end
-    env = result
   end
   if type(env) ~= "table" then
-    return nil
+    env = {}
   end
-  local out = {}
   for name, value in pairs(env) do
     if type(name) == "string" and (type(value) == "string" or type(value) == "number") then
       out[name] = tostring(value)
@@ -521,7 +534,12 @@ function Session:run_shell(command)
   if not self.busy then
     self.chat:set_status({ activity = "Running !" .. command:gsub("\n.*", " …") })
   end
-  shell.job = vim.system({ vim.o.shell, vim.o.shellcmdflag, command }, { cwd = self.cwd, text = true }, function(result)
+  -- The same environment Claude's own commands get. Worked out afresh when the
+  -- process isn't running (suspended, or never started), rather than reusing
+  -- what it last started with.
+  local env = self:running() and self.env or self:environment()
+  local opts = { cwd = self.cwd, text = true, env = env }
+  shell.job = vim.system({ vim.o.shell, vim.o.shellcmdflag, command }, opts, function(result)
     vim.schedule(function()
       self:finish_shell(command, shell, result)
     end)

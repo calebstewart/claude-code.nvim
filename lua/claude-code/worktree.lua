@@ -38,6 +38,7 @@ M.outcomes = {
 ---@field cwd? string Run as if started here (`-C`); default: Neovim's cwd.
 ---@field session? claude_code.WtSession Act for this session (`--session`, `--pid`).
 ---@field timeout? integer Milliseconds, when called without a callback (default 5000).
+---@field package on_exit? fun(done: vim.SystemCompleted) With a callback: called as the process exits, in a fast event (before `callback` is scheduled), so a synchronous caller can wait for it without running anything else.
 
 --- Commands that change which trees exist or who holds them.
 local MUTATING = { new = true, adopt = true, claim = true, release = true, rm = true, cleanup = true, setup = true }
@@ -60,8 +61,10 @@ local LIST_TTL_MS = 5000
 ---@type table<string, { at: integer, result: claude_code.WtResult }>
 local list_cache = {}
 
---- Asynchronous `wt list`s running, by directory, with the callbacks waiting on each.
----@type table<string, { at: integer, generation: integer, callbacks: fun(result: claude_code.WtResult)[] }>
+--- Asynchronous `wt list`s running, by directory, with the callbacks waiting on
+--- each. `done` is the finished process, set as soon as it exits (see M.list).
+---@alias claude_code.WtListRun { at: integer, generation: integer, callbacks: fun(result: claude_code.WtResult)[], done?: vim.SystemCompleted }
+---@type table<string, claude_code.WtListRun>
 local in_flight = {}
 
 --- Bumped by M.invalidate(). A `wt list` caches its result only if this hasn't
@@ -198,6 +201,9 @@ function M.run(args, opts, callback)
   end
 
   local ok, proc = pcall(vim.system, cmd, { text = true, env = ANONYMOUS }, callback and function(done)
+    if opts.on_exit then
+      opts.on_exit(done)
+    end
     vim.schedule(function()
       callback(finish(done))
     end)
@@ -260,29 +266,53 @@ function M.list(dir, callback, opts)
     return hit.result
   end
   local started = generation
-  local function store(result)
+  ---@param result claude_code.WtResult
+  ---@param at integer When the `wt list` that produced it started.
+  local function store(result, at)
     -- A fresh `wt list` can overtake an older one still running: the newer start wins.
     local newer = list_cache[dir]
-    if result.ok and generation == started and not (newer and newer.at > now) then
-      list_cache[dir] = { at = now, result = result }
+    if result.ok and generation == started and not (newer and newer.at > at) then
+      list_cache[dir] = { at = at, result = result }
     end
     return result
   end
-  if not callback then
-    return store(M.run({ "list" }, { cwd = dir }) --[[@as claude_code.WtResult]])
-  end
   local running = in_flight[dir]
-  if running and running.generation == generation and running.at >= oldest then
+  local joinable = running and running.generation == generation and running.at >= oldest
+  if not callback then
+    if joinable then
+      -- Wait for the background `wt list` that will do rather than start
+      -- another (e.g. a new session starting while its chat's winbar looks the
+      -- tree up). Only fast events run meanwhile, as in a synchronous M.run: no
+      -- scheduled callbacks or autocmds, which could re-enter the caller.
+      vim.wait(5000, function()
+        return running.done ~= nil
+      end, 5, true)
+      local done = running.done
+      if not done then
+        return failure("wt did not finish within 5000 ms")
+      end
+      return store(M.parse(done.code, done.stdout, done.stderr), running.at)
+    end
+    return store(M.run({ "list" }, { cwd = dir }) --[[@as claude_code.WtResult]], now)
+  end
+  if joinable then
     table.insert(running.callbacks, callback)
     return nil
   end
+  ---@type claude_code.WtListRun
   running = { at = now, generation = generation, callbacks = { callback } }
   in_flight[dir] = running
-  M.run({ "list" }, { cwd = dir }, function(result)
+  local run_opts = {
+    cwd = dir,
+    on_exit = function(done)
+      running.done = done
+    end,
+  }
+  M.run({ "list" }, run_opts, function(result)
     if in_flight[dir] == running then
       in_flight[dir] = nil
     end
-    store(result)
+    store(result, running.at)
     for _, cb in ipairs(running.callbacks) do
       cb(result)
     end
@@ -321,6 +351,45 @@ local function find_tree(result, dir)
   return nil
 end
 
+--- Whether `dir` is in a linked git worktree: the nearest `.git` above it is a
+--- file, not a directory. Every `wt` tree is one (the root checkout can't be a
+--- tree), so anywhere else can't be in a tree, and this answers that without
+--- starting `wt` (a Python process, around 100 ms).
+---@param dir string
+---@return boolean
+local function in_linked_worktree(dir)
+  local git = vim.fs.find(".git", { path = dir, upward = true, limit = 1 })[1]
+  local stat = git and vim.uv.fs_stat(git)
+  return stat ~= nil and stat.type == "file"
+end
+
+--- The tree containing `dir`, and why it couldn't be found if `wt` failed.
+---@param dir string
+---@param callback? fun(tree: table?, err: string?) Without one, runs synchronously.
+---@param opts? claude_code.WtListOpts
+---@return table? tree
+---@return string? err
+local function lookup(dir, callback, opts)
+  if not M.enabled() or vim.fn.isdirectory(dir) == 0 or not in_linked_worktree(dir) then
+    if callback then
+      vim.schedule(function()
+        callback(nil)
+      end)
+    end
+    return nil
+  end
+  local function found(result)
+    return find_tree(result, dir), not result.ok and result.error or nil
+  end
+  if callback then
+    M.list(dir, function(result)
+      callback(found(result))
+    end, opts)
+    return nil
+  end
+  return found(M.list(dir, nil, opts) --[[@as claude_code.WtResult]])
+end
+
 --- The `wt` tree containing `dir`, or nil (not in a tree, not a git repository,
 --- or `wt` unavailable). The tree is `wt list`'s entry: name, path, branch,
 --- slot, state, holder, env, ...
@@ -329,21 +398,68 @@ end
 ---@param opts? claude_code.WtListOpts
 ---@return table?
 function M.tree_for(dir, callback, opts)
-  if not M.enabled() or vim.fn.isdirectory(dir) == 0 then
-    if callback then
-      vim.schedule(function()
-        callback(nil)
-      end)
-    end
-    return nil
-  end
   if callback then
-    M.list(dir, function(result)
-      callback(find_tree(result, dir))
+    lookup(dir, function(tree)
+      callback(tree)
     end, opts)
     return nil
   end
-  return find_tree(M.list(dir, nil, opts) --[[@as claude_code.WtResult]], dir)
+  return (lookup(dir, nil, opts))
+end
+
+--- Environment for a session's claude process running in `dir`: the tree's
+--- environment when `dir` is in one (what `wt env <name>` prints: its setup
+--- output plus `wt`'s own WT_* variables), and the session's identity.
+---
+--- WT_PID is Neovim's pid, not the claude process's: `wt` reads it before
+--- CLAUDE_PID, so a claim made from the session stays live while Neovim has the
+--- session open, including while its process is stopped for being idle.
+--- WT_SESSION_ID pins the id too, over any WT_SESSION_ID Neovim inherited.
+---
+--- Synchronous, but only runs `wt` when `dir` is in a linked git worktree.
+---@param session_id string
+---@param dir string
+---@return table<string, string> env
+---@return string? err Why the tree's environment is missing, when `wt` failed.
+function M.session_env(session_id, dir)
+  local env = {}
+  local tree, err = lookup(dir)
+  if tree and type(tree.env) == "table" then
+    for name, value in pairs(tree.env) do
+      if type(name) == "string" and (type(value) == "string" or type(value) == "number") then
+        env[name] = tostring(value)
+      end
+    end
+  end
+  env.WT_PID = tostring(vim.fn.getpid())
+  env.WT_SESSION_ID = session_id
+  return env, err
+end
+
+--- Release whichever tree session `id` holds, in any project, acting as that
+--- session (`--session`, with Neovim's pid). Found from `wt list --all-projects`
+--- by its holder, not from the session's directory: a session may hold a tree
+--- other than the one it runs in. `wt` gives a session at most one tree.
+---@param id string
+---@param callback fun(name: string?, result: claude_code.WtResult?) `name` is nil when the session held nothing; `result` is the failed `wt` call, if any.
+function M.release_session(id, callback)
+  M.run({ "list", "--all-projects" }, {}, function(listed)
+    if not listed.ok then
+      return callback(nil, listed)
+    end
+    for _, project in ipairs(listed.data or {}) do
+      for _, tree in ipairs(project.trees or {}) do
+        if type(tree.holder) == "table" and tree.holder.session == id then
+          local opts = { cwd = tree.root or project.root, session = { id = id, pid = vim.fn.getpid() } }
+          M.run({ "release", tree.name }, opts, function(result)
+            callback(tree.name, not result.ok and result or nil)
+          end)
+          return
+        end
+      end
+    end
+    callback(nil)
+  end)
 end
 
 return M

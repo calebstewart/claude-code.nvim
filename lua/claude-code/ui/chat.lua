@@ -1310,7 +1310,10 @@ end
 ---@param status claude_code.ChatStatus Fields to update; `activity` is always replaced.
 function Chat:set_status(status)
   local activity = status.activity
-  local was_busy, was_stopped = self.status.activity ~= nil, self.status.stopped
+  -- Starting and Loading end without a turn having run, so nothing can have changed the trees.
+  local previous = self.status.activity
+  local was_busy = previous ~= nil and previous ~= "Starting" and previous ~= "Loading"
+  local was_stopped = self.status.stopped
   self.status = vim.tbl_extend("force", self.status, status)
   self.status.activity = activity
   events.sessions_changed()
