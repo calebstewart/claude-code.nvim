@@ -66,6 +66,7 @@ end
 ---@class claude_code.SessionPicker
 ---@field private state claude_code.PickerState
 ---@field private entries claude_code.SessionEntry[]
+---@field private stored table[] SDKSessionInfo[] the entries were merged from
 ---@field private shown claude_code.SessionEntry[] After filtering.
 ---@field private index integer Selected row in `shown`.
 ---@field private bufs { list: integer, prompt: integer, preview: integer }
@@ -78,16 +79,27 @@ end
 local Picker = {}
 Picker.__index = Picker
 
---- Stored sessions plus the ones open in this Neovim (for the project scope,
---- only those running in Neovim's cwd or another worktree of its repository,
---- as the stored list has them), newest first.
+--- Set the entries: stored sessions plus the ones open in this Neovim (for the
+--- project scope, only those running in Neovim's cwd or another worktree of its
+--- repository, as the stored list has them), newest first.
+---
+--- Which repository an open session belongs to is resolved in the background
+--- (git, once per directory): one that isn't known yet is left out, and the
+--- list is merged again when it is.
+---@private
 ---@param stored table[] SDKSessionInfo[]
----@param scope "project"|"all"
----@return claude_code.SessionEntry[]
-local function merge(stored, scope)
+function Picker:merge(stored)
+  self.stored = stored
+  local scope = self.state.scope
   local cwd = vim.fn.getcwd()
-  return listing.merge(stored, function(s)
-    return scope == "all" or s.cwd == cwd or listing.root(s.cwd) == listing.root(cwd)
+  local function resolved()
+    if not self.closed and scope == self.state.scope and self.stored == stored then
+      self:merge(stored)
+      self:filter()
+    end
+  end
+  self.entries = listing.merge(stored, function(s)
+    return scope == "all" or s.cwd == cwd or listing.root(s.cwd, resolved) == listing.root(cwd, resolved)
   end)
 end
 
@@ -95,7 +107,7 @@ end
 function M.open(state)
   local self = setmetatable({
     state = state or { scope = "project", query = "" },
-    entries = merge({}, (state or {}).scope or "project"),
+    entries = {},
     shown = {},
     index = 1,
     wins = {},
@@ -104,6 +116,7 @@ function M.open(state)
     loading = true,
     closed = false,
   }, Picker)
+  self:merge({})
   self:create()
   self:load()
 end
@@ -224,7 +237,7 @@ function Picker:load()
     if err then
       vim.notify("claude-code: couldn't list sessions: " .. err, vim.log.levels.ERROR)
     end
-    self.entries = merge(result or {}, scope)
+    self:merge(result or {})
     self:filter()
   end)
 end
@@ -583,7 +596,7 @@ function Picker:map_keys()
   map("<C-g>", function()
     self.state.scope = self.state.scope == "project" and "all" or "project"
     self.index = 1
-    self.entries = merge({}, self.state.scope)
+    self:merge({})
     self:load()
   end)
   for _, lhs in ipairs({ "<Esc>", "<C-c>" }) do
