@@ -17,8 +17,9 @@ end
 
 -- What's under way per tree ----------------------------------------------------
 
---- Actions running, by tree (M.key): what to show for it, e.g. "removing".
----@type table<string, string>
+--- Actions running, by tree (M.key): what to show for it, e.g. "removing",
+--- and the tree's path.
+---@type table<string, { what: string, path?: string }>
 local busy = {}
 
 ---@type table<integer, fun()>
@@ -37,38 +38,44 @@ function M.subscribe(fn)
   end
 end
 
----@param tree table
+--- A tree's key: its project's root and its name.
+---@param tree { root?: string, name: string }
 ---@return string
 function M.key(tree)
   return (tree.root or "") .. "\0" .. tree.name
 end
 
---- What's under way on `tree`, if anything ("removing", ...).
----@param tree table
+--- What's under way on `tree`, if anything ("removing", "opening", ...).
+---@param tree { root?: string, name: string }
 ---@return string?
 function M.busy(tree)
-  return busy[M.key(tree)]
+  local entry = busy[M.key(tree)]
+  return entry and entry.what
 end
 
 --- Whether nothing is under way on `tree`; if something is, says so.
----@param tree table
+---@param tree { root?: string, name: string }
 ---@return boolean
-local function idle(tree)
-  local doing = busy[M.key(tree)]
+function M.idle(tree)
+  local doing = M.busy(tree)
   if doing then
-    notify(("already %s %s"):format(doing, tree.name))
+    notify(("%s is busy (%s); try again once that's done"):format(tree.name, doing))
   end
   return doing == nil
 end
+local idle = M.idle
 
----@param tree table
+--- Mark an action as under way on `tree` (or done, with no `what`). Also used
+--- by `:Claude work` while it claims a tree for a session it's about to open.
+---@param tree { root?: string, name: string, path?: string }
 ---@param what? string
-local function set_busy(tree, what)
-  busy[M.key(tree)] = what
+function M.set_busy(tree, what)
+  busy[M.key(tree)] = what and { what = what, path = tree.path } or nil
   for _, fn in pairs(listeners) do
     fn()
   end
 end
+local set_busy = M.set_busy
 
 -- Who's in a tree --------------------------------------------------------------
 
@@ -88,6 +95,19 @@ function M.within(dir, root)
   end
   dir, root = real(dir), real(root)
   return dir == root or vim.startswith(dir, root:gsub("/+$", "") .. "/")
+end
+
+--- The name of the tree being removed that `dir` is in, if any: no session may
+--- start there (sessions.new and sessions.open check), since its directory is
+--- about to go.
+---@param dir? string
+---@return string?
+function M.removing_at(dir)
+  for key, entry in pairs(busy) do
+    if entry.what == "removing" and M.within(dir, entry.path) then
+      return (key:match("%z(.*)$"))
+    end
+  end
 end
 
 --- Sessions open in this Neovim working in `tree`: running in it, or holding it.
@@ -169,6 +189,9 @@ end
 --- claimed for that session (see work.open).
 ---@param tree table
 function M.open(tree)
+  if not idle(tree) then
+    return
+  end
   local here = M.sessions_in(tree)[1]
   if here then
     sessions.show(here)
@@ -189,7 +212,11 @@ function M.open(tree)
     return
   end
   local work = require("claude-code.work")
+  -- Busy while looking for its sessions, so it can't be removed meanwhile;
+  -- work.open marks it busy again while it claims the tree.
+  set_busy(tree, "opening")
   stored_in(tree, function(stored)
+    set_busy(tree, nil)
     if #stored == 0 then
       return work.open(tree)
     end
@@ -348,10 +375,16 @@ local function interrupts(session)
   return #what > 0 and table.concat(what, ", ") or nil
 end
 
---- Close `closing` and call `done` once their processes and `!command`s have
---- exited and their trees have been released, or after a few seconds anyway.
+--- How long to wait for closed sessions to let go of a tree being removed:
+--- longer than a transport takes to stop a process that ignores stdin closing
+--- (SIGTERM after 2 s, SIGKILL 5 s after that).
+local CLOSE_TIMEOUT_MS = 10000
+
+--- Close `closing`, then call `done` with nil once their processes and
+--- `!command`s have exited and their trees have been released, or with why not
+--- when that hasn't happened within CLOSE_TIMEOUT_MS.
 ---@param closing claude_code.Session[]
----@param done fun()
+---@param done fun(problem?: string)
 local function close_all(closing, done)
   local releases = #closing
   for _, s in ipairs(closing) do
@@ -363,16 +396,24 @@ local function close_all(closing, done)
       releases = releases - 1
     end)
   end
-  local deadline = vim.uv.now() + 5000
+  local deadline = vim.uv.now() + CLOSE_TIMEOUT_MS
   local function check()
-    local settled = releases == 0
+    local still = {}
     for _, s in ipairs(closing) do
-      settled = settled and not s:running() and not s.shell
+      if s:running() or s.shell then
+        table.insert(still, title(s))
+      end
     end
-    if settled or vim.uv.now() > deadline then
-      done()
+    if #still == 0 and releases == 0 then
+      return done()
+    end
+    if vim.uv.now() < deadline then
+      return vim.defer_fn(check, 50)
+    end
+    if #still > 0 then
+      done(("%s still running after %ds"):format(table.concat(still, ", "), CLOSE_TIMEOUT_MS / 1000))
     else
-      vim.defer_fn(check, 50)
+      done("releasing the tree for its closed sessions hasn't finished")
     end
   end
   check()
@@ -414,9 +455,9 @@ function M.remove(tree)
   local as = identity(tree)
   set_busy(tree, "checking")
   worktree.run({ "rm", tree.name }, { cwd = tree.root, session = as }, function(result)
-    set_busy(tree, nil)
     local plan = result.data and result.data.plan
     if not result.ok then
+      set_busy(tree, nil)
       if type(plan) == "table" and (result.outcome == "held" or result.outcome == "refused") then
         local lines = M.plan_lines(plan)
         notify(("can't remove %s:\n%s"):format(tree.name, table.concat(lines, "\n")), vim.log.levels.WARN)
@@ -436,11 +477,24 @@ function M.remove(tree)
         table.insert(lines, ("  %s%s"):format(title(s), cut and (" (" .. cut .. ")") or ""))
       end
     end
+    -- Still "checking" while asking, so nothing else starts on the tree.
     if vim.fn.confirm(table.concat(lines, "\n"), "&Remove\n&Cancel", 2, "Warning") ~= 1 then
-      return
+      return set_busy(tree, nil)
     end
+    -- From here no session may open in it (see M.removing_at, work.lua).
     set_busy(tree, "removing")
-    close_all(M.sessions_in(tree), function()
+    close_all(M.sessions_in(tree), function(problem)
+      -- A session reopened in it anyway (e.g. by a plugin bypassing the
+      -- checks) would lose its directory: `wt rm` runs as the holder's id.
+      local back = M.sessions_in(tree)[1]
+      if not problem and back then
+        problem = ("%s is open in it again"):format(title(back))
+      end
+      if problem then
+        set_busy(tree, nil)
+        notify(("not removing %s: %s"):format(tree.name, problem), vim.log.levels.ERROR)
+        return
+      end
       worktree.run({ "rm", tree.name, "--yes" }, { cwd = tree.root, session = as }, function(done)
         removed(tree, done)
       end)

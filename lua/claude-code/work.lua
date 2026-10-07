@@ -79,6 +79,8 @@ end
 ---@field resume? table SDKSessionInfo of the stored session to resume, instead of starting a new one.
 ---@field started integer
 ---@field key string
+---@field root? string The project's root, once known.
+---@field busy? { root: string, name: string, path?: string } The tree marked busy while it's claimed for this request.
 
 --- Start a request, or nil (after saying so) when the same one is running.
 ---@param cwd string
@@ -109,6 +111,10 @@ end
 local function finish(request)
   running[request.key] = nil
   pending[request.id] = nil
+  if request.busy then
+    require("claude-code.trees").set_busy(request.busy, nil)
+    request.busy = nil
+  end
 end
 
 --- Open the request's session in the tree it now holds.
@@ -190,6 +196,18 @@ end
 ---@param request claude_code.WorkRequest
 ---@param name string
 local function claim(request, name)
+  -- Never claim a tree for a session while it's being removed (or anything
+  -- else is under way on it), and keep it from being removed until the session
+  -- is open in it (see claude-code.trees).
+  if request.root then
+    local trees = require("claude-code.trees")
+    local tree = { root = request.root, name = name }
+    if not trees.idle(tree) then
+      return finish(request)
+    end
+    trees.set_busy(tree, "opening")
+    request.busy = tree
+  end
   worktree.claim_interactively(function(take_over, done)
     local args = { "claim", name, take_over and "--take-over" or nil }
     worktree.run(args, { cwd = request.cwd, session = request.identity }, done)
@@ -252,6 +270,7 @@ function M.work(text, opts)
       worktree.report(listed)
       return finish(request)
     end
+    request.root = listed.data and listed.data.root or nil
     local tree = find(listed, text)
     if tree then
       claim(request, tree.name)
@@ -278,6 +297,7 @@ function M.open(tree, opts)
   end
   local request = begin(tree.root or vim.fn.getcwd(), tree.name, opts.resume)
   if request then
+    request.root = tree.root
     claim(request, tree.name)
   end
 end

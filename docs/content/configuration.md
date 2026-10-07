@@ -346,10 +346,14 @@ here that work in it, and its environment. `name` pre-fills the search.
   closes them first, since their directory is about to go: a turn in progress is interrupted, a pending
   permission request or question is dropped, and a running `!command` is killed, all of which the question
   says. Their transcripts stay on disk. The plugin waits for their processes to exit and their claims to be
-  released, then runs `wt rm --yes`. It refuses to remove a tree a Claude Code process outside this Neovim is
-  running in.
-- **Every `wt` call runs in the background.** A row shows what's under way on it (checking, removing, …). The
-  list reloads after each action, on `User ClaudeCodeWorktreesChanged`, and when Neovim regains focus.
+  released, then runs `wt rm --yes`. If a process is still running after 10 seconds, the tree is not removed:
+  you're told which session it was, and can try again. It also refuses to remove a tree a Claude Code process
+  outside this Neovim is running in.
+- **While a tree is being removed, no session can start in it.** Opening it from the picker, `:Claude work`,
+  and resuming or starting a session there (from the session picker too) are refused until the removal ends.
+- **Every `wt` call runs in the background.** A row shows what's under way on it (checking, opening,
+  removing, …), and other actions on that tree are refused meanwhile. The list reloads after each action, on
+  `User ClaudeCodeWorktreesChanged`, and when Neovim regains focus.
 - Without `wt`, or with `worktree.enabled = false`, the command just says so.
 
 ### worktree.enabled

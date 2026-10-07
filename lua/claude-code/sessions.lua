@@ -108,12 +108,28 @@ function M.adopt(session)
   add(session)
 end
 
+--- Whether `dir` is in a `wt` tree the tree picker is removing (and says so):
+--- a session started there would have its directory deleted under it.
+---@param dir? string
+---@return boolean
+local function being_removed(dir)
+  local trees = package.loaded["claude-code.trees"]
+  local name = trees and dir and trees.removing_at(dir)
+  if name then
+    vim.notify(("claude-code: %s is being removed; not starting a session in it"):format(name), vim.log.levels.WARN)
+  end
+  return name ~= nil
+end
+
 --- Start a new session and show it.
 ---@param title? string
 ---@param opts? { cwd?: string, id?: string, claimed?: boolean, show?: { here?: boolean } } `cwd`: run it there instead of Neovim's cwd. `id`, `claimed`: see claude_code.SessionOpts.
 ---@return claude_code.Session?
 function M.new(title, opts)
   opts = opts or {}
+  if being_removed(opts.cwd or vim.fn.getcwd()) then
+    return nil
+  end
   local session =
     Session.new({ title = title ~= "" and title or nil, cwd = opts.cwd, id = opts.id, claimed = opts.claimed })
   if session then
@@ -172,6 +188,9 @@ function M.open(info, show_opts)
   local existing = M.find(info.sessionId)
   if existing then
     M.show(existing, show_opts)
+    return
+  end
+  if being_removed(info.cwd) then
     return
   end
   local pid = M.open_elsewhere()[info.sessionId]
