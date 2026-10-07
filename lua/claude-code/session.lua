@@ -284,14 +284,37 @@ function Session:needs_attention()
   return self.permissions:pending()
 end
 
+--- Whether the session's directory is in a `wt` tree being removed (see
+--- trees.removing_at); if so, says so.
+---@private
+---@return boolean
+function Session:refuse_removed_tree()
+  local trees = package.loaded["claude-code.trees"]
+  local name = trees and trees.removing_at(self.cwd)
+  if name then
+    vim.notify(
+      ("claude-code: %s is being removed; not running “%s” in it"):format(name, self.title or "New session"),
+      vim.log.levels.WARN
+    )
+  end
+  return name ~= nil
+end
+
 --- Start (or restart) the process, resuming the transcript if there is one.
 --- Not when its working directory is gone: Claude can't run there, and would
 --- fail with an error that doesn't say why. Offers to move the session instead.
+--- Nor while its directory is in a `wt` tree the tree picker is removing: it's
+--- about to be deleted. Every process a session runs starts here, so this is
+--- the one check that covers every way of starting one.
 ---@private
 function Session:start()
   if vim.fn.isdirectory(self.cwd) == 0 then
     self.chat:set_status({ activity = nil, stopped = "no_cwd" })
     self:offer_relocate()
+    return
+  end
+  if self:refuse_removed_tree() then
+    self.chat:set_status({ activity = nil, stopped = "ended" })
     return
   end
   self.suspending = false
@@ -441,6 +464,11 @@ function Session:relocate(dir, done)
   if vim.fn.isdirectory(path) == 0 then
     return fail("not a directory: " .. dir)
   end
+  local trees = package.loaded["claude-code.trees"]
+  local removing = trees and trees.removing_at(path)
+  if removing then
+    return fail(("%s is being removed"):format(removing))
+  end
   if self.busy then
     return fail("Claude is working; interrupt it first")
   end
@@ -531,6 +559,9 @@ function Session:run_shell(command)
   end
   if vim.fn.isdirectory(self.cwd) == 0 then
     self:start() -- explains, and offers to move it
+    return false
+  end
+  if self:refuse_removed_tree() then
     return false
   end
   local transcript = self.chat.transcript

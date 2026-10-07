@@ -120,6 +120,7 @@ local function being_removed(dir)
   end
   return name ~= nil
 end
+M.being_removed = being_removed
 
 --- Start a new session and show it.
 ---@param title? string

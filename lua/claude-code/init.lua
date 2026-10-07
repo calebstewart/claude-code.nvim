@@ -27,6 +27,9 @@ function M.here()
     return
   end
   if not s then
+    if sessions.being_removed(vim.fn.getcwd()) then
+      return
+    end
     s = require("claude-code.session").new()
     if not s then
       return
