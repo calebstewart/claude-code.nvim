@@ -90,6 +90,7 @@ local function apply()
     ClaudeCodeError = { fg = err },
     ClaudeCodeStatus = { fg = claude, bold = true },
     ClaudeCodeTitle = { fg = claude, bold = true },
+    ClaudeCodeWorktree = { fg = accent("Type", 0x56b6c2) },
     ClaudeCodePrompt = { link = "Normal" },
     ClaudeCodePromptBorder = { fg = blend(claude, bg, 0.6) },
     ClaudeCodePromptBusy = { fg = claude },

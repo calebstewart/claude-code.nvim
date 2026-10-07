@@ -193,6 +193,16 @@ function M.deliver()
   s:deliver_held()
 end
 
+--- The `wt` tree the current session runs in, for statuslines: `{ name, slot,
+--- branch, path }`, or nil (not in a tree, or the worktree integration is off).
+--- Cheap: returns what the chat last looked up, and never runs `wt`. Redraw on
+--- `User ClaudeCodeSessionsChanged`, which fires when it changes.
+---@return claude_code.ChatTree?
+function M.worktree()
+  local s = sessions.peek()
+  return s and s.chat:worktree()
+end
+
 --- Switch to the next/previous session open in this Neovim.
 function M.next()
   sessions.cycle(1)

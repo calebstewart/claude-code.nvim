@@ -549,6 +549,11 @@ function Session:finish_shell(command, shell, result)
   end
   local shown = vim.trim(stdout .. (stderr ~= "" and ("\n" .. stderr) or ""))
   self.chat.transcript:tool_result(shell.id, (shell.killed or result.code ~= 0) and "error" or "success", shown)
+  -- It may have been a `wt` command that created or removed a tree.
+  local worktree = require("claude-code.worktree")
+  if worktree.enabled() then
+    worktree.invalidate()
+  end
 
   local max = config.options.shell.max_output
   local function cap(text)

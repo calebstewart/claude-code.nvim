@@ -48,16 +48,31 @@ local MUTATING = { new = true, adopt = true, claim = true, release = true, rm = 
 --- empty value as unset.
 local ANONYMOUS = { WT_SESSION_ID = "", WT_PID = "", CLAUDE_CODE_SESSION_ID = "", CLAUDE_PID = "" }
 
+--- `User` autocmd fired (on the next tick) after the trees or their holders may
+--- have changed: a mutating command run through this module finished, or
+--- M.invalidate() was called. Views showing a tree look it up again.
+M.CHANGED = "ClaudeCodeWorktreesChanged"
+
 --- How long a `wt list` result is reused for the same directory.
 local LIST_TTL_MS = 5000
 
+--- Keyed by directory; `at` is when the `wt list` started.
 ---@type table<string, { at: integer, result: claude_code.WtResult }>
 local list_cache = {}
+
+--- Asynchronous `wt list`s running, by directory, with the callbacks waiting on each.
+---@type table<string, { at: integer, generation: integer, callbacks: fun(result: claude_code.WtResult)[] }>
+local in_flight = {}
 
 --- Bumped by M.invalidate(). A `wt list` caches its result only if this hasn't
 --- changed since it started, so one that read the registry before a change
 --- can't put the old state back after the change cleared the cache.
 local generation = 0
+
+local function forget()
+  list_cache = {}
+  generation = generation + 1
+end
 
 ---@return string
 local function default_path()
@@ -162,7 +177,7 @@ function M.run(args, opts, callback)
   opts = opts or {}
   local cmd = command(args, opts)
   if MUTATING[args[1]] then
-    M.invalidate()
+    forget()
   end
   if not cmd then
     local result = failure("wt not found; install the worktree skill, or set `worktree.wt`")
@@ -210,19 +225,32 @@ function M.run(args, opts, callback)
 end
 
 --- Forget cached `wt list` results, e.g. after a tree was created or removed
---- outside this module.
+--- outside this module, and tell views showing a tree (M.CHANGED).
 function M.invalidate()
-  list_cache = {}
-  generation = generation + 1
+  forget()
+  vim.schedule(function()
+    vim.api.nvim_exec_autocmds("User", { pattern = M.CHANGED, modeline = false })
+  end)
 end
 
+---@class claude_code.WtListOpts
+---@field fresh? boolean Only a `wt list` started by this call or later will do, not a cached or running older one.
+
 --- `wt list` for the project containing `dir`, reused for a few seconds.
+---
+--- Asynchronous calls for the same directory share a running `wt list`. With
+--- `opts.fresh`, the result reflects the registry as of the call, e.g. to catch
+--- a change made outside the plugin; fresh calls in the same tick still share.
 ---@param dir string
 ---@param callback? fun(result: claude_code.WtResult) Without one, runs synchronously.
+---@param opts? claude_code.WtListOpts
 ---@return claude_code.WtResult?
-function M.list(dir, callback)
+function M.list(dir, callback, opts)
+  local now = vim.uv.now()
+  -- The oldest start time of a `wt list` whose result will do.
+  local oldest = opts and opts.fresh and now or now - LIST_TTL_MS + 1
   local hit = list_cache[dir]
-  if hit and vim.uv.now() - hit.at < LIST_TTL_MS then
+  if hit and hit.at >= oldest then
     if callback then
       vim.schedule(function()
         callback(hit.result)
@@ -233,18 +261,33 @@ function M.list(dir, callback)
   end
   local started = generation
   local function store(result)
-    if result.ok and generation == started then
-      list_cache[dir] = { at = vim.uv.now(), result = result }
+    -- A fresh `wt list` can overtake an older one still running: the newer start wins.
+    local newer = list_cache[dir]
+    if result.ok and generation == started and not (newer and newer.at > now) then
+      list_cache[dir] = { at = now, result = result }
     end
     return result
   end
-  if callback then
-    M.run({ "list" }, { cwd = dir }, function(result)
-      callback(store(result))
-    end)
+  if not callback then
+    return store(M.run({ "list" }, { cwd = dir }) --[[@as claude_code.WtResult]])
+  end
+  local running = in_flight[dir]
+  if running and running.generation == generation and running.at >= oldest then
+    table.insert(running.callbacks, callback)
     return nil
   end
-  return store(M.run({ "list" }, { cwd = dir }) --[[@as claude_code.WtResult]])
+  running = { at = now, generation = generation, callbacks = { callback } }
+  in_flight[dir] = running
+  M.run({ "list" }, { cwd = dir }, function(result)
+    if in_flight[dir] == running then
+      in_flight[dir] = nil
+    end
+    store(result)
+    for _, cb in ipairs(running.callbacks) do
+      cb(result)
+    end
+  end)
+  return nil
 end
 
 --- Whether `dir` is `root` or somewhere inside it.
@@ -283,8 +326,9 @@ end
 --- slot, state, holder, env, ...
 ---@param dir string
 ---@param callback? fun(tree: table?) Without one, runs synchronously.
+---@param opts? claude_code.WtListOpts
 ---@return table?
-function M.tree_for(dir, callback)
+function M.tree_for(dir, callback, opts)
   if not M.enabled() or vim.fn.isdirectory(dir) == 0 then
     if callback then
       vim.schedule(function()
@@ -296,10 +340,10 @@ function M.tree_for(dir, callback)
   if callback then
     M.list(dir, function(result)
       callback(find_tree(result, dir))
-    end)
+    end, opts)
     return nil
   end
-  return find_tree(M.list(dir) --[[@as claude_code.WtResult]], dir)
+  return find_tree(M.list(dir, nil, opts) --[[@as claude_code.WtResult]], dir)
 end
 
 return M

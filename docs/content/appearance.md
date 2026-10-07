@@ -117,6 +117,7 @@ All groups are prefixed `ClaudeCode`. The prefix is omitted in the table below.
 | `Error` | Error text |
 | `Status` | Status text in the prompt border |
 | `Title` | Titles |
+| `Worktree` | The session's [`wt` tree](@/configuration.md#worktrees) in the chat's bar |
 | `Prompt` | The prompt buffer (links to `Normal`) |
 | `PromptBorder` | The prompt's border |
 | `PromptBusy` | The border while Claude is working |

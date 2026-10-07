@@ -16,6 +16,7 @@ local Transcript = require("claude-code.ui.transcript")
 local welcome = require("claude-code.ui.welcome")
 local images = require("claude-code.images")
 local events = require("claude-code.events")
+local worktree = require("claude-code.worktree")
 
 local dock_ns = api.nvim_create_namespace("claude-code.dock")
 
@@ -131,6 +132,12 @@ end
 ---@field commands? fun(): claude_code.SlashCommand[] Slash commands for completion.
 ---@field on_rebuild? fun(transcript: boolean) A deleted buffer was replaced (`transcript`: the transcript, now empty).
 
+---@class claude_code.ChatTree The `wt` tree the session's working directory is in.
+---@field name string
+---@field slot integer
+---@field branch? string Nil when detached.
+---@field path string
+
 ---@class claude_code.Chat
 ---@field transcript claude_code.Transcript
 ---@field prompt claude_code.Prompt
@@ -152,6 +159,8 @@ end
 ---@field private wiped? boolean
 ---@field private agent_lines table<integer, string> Dock line -> tool_use id of the running subagent shown there.
 ---@field private agent_range? { first: integer, last: integer } Dock lines holding subagents, if any.
+---@field private tree? claude_code.ChatTree Last result of refresh_tree(), shown in the winbar.
+---@field private tree_lookup? { cwd: string, again: boolean, fresh: boolean } The lookup in flight, if any, and whether another (fresh) one is due after it.
 local Chat = {}
 Chat.__index = Chat
 
@@ -196,6 +205,24 @@ function Chat.new(opts)
           end
         end)
       end
+    end,
+  })
+  -- A tree may have been created or removed: by the plugin (which has cleared
+  -- `wt list`'s cache), or from a terminal outside Neovim (so skip the cache).
+  -- What Claude does is caught when its turn ends. Hidden chats too, since
+  -- worktree() reports the current session's tree while the sidebar is closed;
+  -- chats in the same directory share one `wt list`.
+  api.nvim_create_autocmd("User", {
+    group = group,
+    pattern = worktree.CHANGED,
+    callback = function()
+      self:refresh_tree()
+    end,
+  })
+  api.nvim_create_autocmd("FocusGained", {
+    group = group,
+    callback = function()
+      self:refresh_tree({ fresh = true })
     end,
   })
   api.nvim_create_autocmd({ "WinResized", "VimResized" }, {
@@ -268,6 +295,7 @@ function Chat.new(opts)
       end)
     end,
   })
+  self:refresh_tree()
   return self
 end
 
@@ -563,16 +591,75 @@ end
 function Chat:set_title(title)
   self.title = title
   events.sessions_changed()
-  local win = self:windows().transcript
-  if win then
-    vim.wo[win][0].winbar = self:winbar()
-  end
+  self:redraw_winbar()
 end
 
 --- The session moved to another working directory.
 ---@param cwd string
 function Chat:set_cwd(cwd)
   self.opts.cwd = cwd
+  self:redraw_winbar()
+  self:refresh_tree()
+end
+
+--- The `wt` tree the session's working directory is in, as last looked up, or
+--- nil (not in a tree, not looked up yet, or the integration is off). Never
+--- runs `wt`.
+---@return claude_code.ChatTree?
+function Chat:worktree()
+  return self.tree and vim.deepcopy(self.tree)
+end
+
+--- Look up, in the background, which `wt` tree the session's working directory
+--- is in, and redraw the winbar if that changed. Rendering only reads the stored
+--- result, so it never waits on `wt`. Without the integration, runs nothing.
+---@param opts? claude_code.WtListOpts `fresh`: something outside the plugin may have changed the trees, so skip `wt list`'s cache.
+function Chat:refresh_tree(opts)
+  if self.wiped then
+    return
+  end
+  if not worktree.enabled() then
+    self:set_tree(nil) -- turned off since the last lookup
+    return
+  end
+  local fresh = opts and opts.fresh or false
+  if self.tree_lookup then
+    -- One lookup at a time, plus one more if this one may be out of date.
+    self.tree_lookup.again = true
+    self.tree_lookup.fresh = self.tree_lookup.fresh or fresh
+    return
+  end
+  local cwd = self.opts.cwd or vim.fn.getcwd()
+  self.tree_lookup = { cwd = cwd, again = false, fresh = false }
+  worktree.tree_for(cwd, function(entry)
+    local lookup = self.tree_lookup
+    self.tree_lookup = nil
+    if self.wiped then
+      return
+    end
+    -- The session moved, or something changed, while it ran: look again.
+    if lookup and (lookup.again or lookup.cwd ~= (self.opts.cwd or vim.fn.getcwd())) then
+      self:refresh_tree({ fresh = lookup.fresh })
+      return
+    end
+    self:set_tree(entry and { name = entry.name, slot = entry.slot, branch = entry.branch, path = entry.path })
+  end, { fresh = fresh })
+end
+
+---@private
+---@param tree? claude_code.ChatTree
+function Chat:set_tree(tree)
+  if vim.deep_equal(tree, self.tree) then
+    return
+  end
+  self.tree = tree
+  self:redraw_winbar()
+  -- Statuslines showing require("claude-code").worktree() redraw on this.
+  events.sessions_changed()
+end
+
+---@private
+function Chat:redraw_winbar()
   local win = self:windows().transcript
   if win then
     vim.wo[win][0].winbar = self:winbar()
@@ -584,9 +671,19 @@ function Chat:winbar()
   local escape = function(s)
     return (s:gsub("%%", "%%%%"))
   end
-  return ("%%#ClaudeCodeTitle# %s %s %%#ClaudeCodeMuted#%s"):format(
+  local tree = ""
+  if self.tree then
+    -- Before the directory, which is truncated first (`%<`) when space runs out.
+    tree = ("%%#ClaudeCodeWorktree#%s %s · slot %s %%<"):format(
+      icons.get().worktree,
+      escape(tostring(self.tree.name)),
+      tostring(self.tree.slot)
+    )
+  end
+  return ("%%#ClaudeCodeTitle# %s %s %s%%#ClaudeCodeMuted#%s"):format(
     icons.get().claude,
     escape(self.title or "New session"),
+    tree,
     escape(vim.fn.fnamemodify(self.opts.cwd or vim.fn.getcwd(), ":~"))
   )
 end
@@ -625,6 +722,8 @@ function Chat:show(show_opts)
     local wo = vim.wo[wins.transcript][0]
     wo.conceallevel, wo.concealcursor = 2, "nc"
     wo.winbar = self:winbar()
+    -- The tree may have changed while the chat was hidden.
+    self:refresh_tree()
   end
   if not wins.dock then
     wins.dock = api.nvim_open_win(self.dock, false, {
@@ -1211,6 +1310,7 @@ end
 ---@param status claude_code.ChatStatus Fields to update; `activity` is always replaced.
 function Chat:set_status(status)
   local activity = status.activity
+  local was_busy, was_stopped = self.status.activity ~= nil, self.status.stopped
   self.status = vim.tbl_extend("force", self.status, status)
   self.status.activity = activity
   events.sessions_changed()
@@ -1233,6 +1333,13 @@ function Chat:set_status(status)
   self:render_status()
   if status.model then
     self:render_welcome()
+  end
+  -- (Re)started, or a turn or `!command` just ended, which may have created or
+  -- removed a tree without the plugin knowing: look the session's tree up again.
+  if was_busy and not activity then
+    self:refresh_tree({ fresh = true })
+  elseif status.stopped == false and was_stopped ~= false then
+    self:refresh_tree()
   end
 end
 

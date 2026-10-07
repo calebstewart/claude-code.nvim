@@ -266,7 +266,8 @@ and vice versa, names included.
 | `:Claude stop` | End the current session and close it (resume it later from the picker) |
 
 The same actions are available from Lua: `require("claude-code").sessions()`, `.new(name)`, `.rename(name)`,
-`.next()`, and so on.
+`.next()`, and so on. With the worktree skill's `wt` installed, `require("claude-code").worktree()` returns the
+current session's tree (`{ name, slot, branch, path }`, or `nil`) for your statusline; the chat's bar shows it too.
 
 ### Appearance
 
