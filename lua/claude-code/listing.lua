@@ -58,6 +58,80 @@ function M.status(entry)
   return " ", "Normal", "saved"
 end
 
+---@type table<string, string|false> cwd -> its project (false while resolving)
+local roots = {}
+
+--- Resolve the project `cwd` belongs to into `roots`.
+---@param cwd string
+---@param on_done? fun() Resolve asynchronously, calling this when done.
+local function resolve(cwd, on_done)
+  roots[cwd] = false
+  local function finish(result)
+    local root = cwd
+    local top, common = (result.stdout or ""):match("^([^\n]+)\n([^\n]+)")
+    if
+      result.code == 0
+      and top
+      and vim.fs.normalize(top) == vim.fs.normalize(cwd)
+      and vim.fs.basename(common) == ".git"
+    then
+      root = vim.fs.dirname(common)
+    end
+    roots[cwd] = root
+  end
+  local cmd = { "git", "-C", cwd, "rev-parse", "--path-format=absolute", "--show-toplevel", "--git-common-dir" }
+  if not vim.uv.fs_stat(cwd) then
+    roots[cwd] = cwd
+    if on_done then
+      on_done()
+    end
+  elseif on_done then
+    vim.system(
+      cmd,
+      { text = true },
+      vim.schedule_wrap(function(result)
+        finish(result)
+        on_done()
+      end)
+    )
+  else
+    finish(vim.system(cmd, { text = true }):wait())
+  end
+end
+
+--- The project `cwd` belongs to: the main worktree of the repository when
+--- `cwd` is the top of one of its worktrees, else `cwd` itself (a plain
+--- directory, a subdirectory of a repository, a bare or removed worktree).
+--- Stored sessions are listed the same way: a directory's list includes its
+--- repository's other worktrees.
+---
+--- Resolved once per directory and cached. With `on_resolved`, an unknown
+--- directory resolves in the background (calling it when done) and `cwd` is
+--- returned meanwhile; without it, it resolves straight away.
+---@param cwd string
+---@param on_resolved? fun()
+---@return string
+function M.root(cwd, on_resolved)
+  if not cwd then
+    return cwd
+  end
+  if roots[cwd] == nil then
+    resolve(cwd, on_resolved)
+  end
+  return roots[cwd] or cwd
+end
+
+--- What tells a session apart from `cwd`'s own in a list: the name of the
+--- directory it runs in (a worktree's, usually) when that isn't `cwd`.
+---@param entry claude_code.SessionEntry
+---@param cwd string
+---@return string?
+function M.tree(entry, cwd)
+  if entry.cwd and vim.fs.normalize(entry.cwd) ~= vim.fs.normalize(cwd) then
+    return vim.fs.basename(vim.fs.normalize(entry.cwd))
+  end
+end
+
 --- Stored sessions plus the open ones `include_live` accepts (including new
 --- sessions not written to disk yet), newest first.
 ---@param stored table[] SDKSessionInfo[]

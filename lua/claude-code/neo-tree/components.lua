@@ -30,12 +30,19 @@ M.session_name = function(config, node)
   }
 end
 
+--- When it was last used, after the worktree it runs in when that isn't the
+--- project's main one.
 M.session_time = function(config, node)
   local entry = source.entry(node)
   if not entry then
     return {}
   end
-  return { text = " " .. listing.ago(entry.last_used) .. " ", highlight = highlights.DIM_TEXT }
+  local text = listing.ago(entry.last_used)
+  local tree = node.extra.cwd and listing.tree(entry, node.extra.cwd)
+  if tree then
+    text = tree .. " · " .. text
+  end
+  return { text = " " .. text .. " ", highlight = highlights.DIM_TEXT }
 end
 
 --- The most pressing status among a project's open sessions, so a collapsed

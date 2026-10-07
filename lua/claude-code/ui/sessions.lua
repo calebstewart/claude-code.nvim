@@ -79,14 +79,15 @@ local Picker = {}
 Picker.__index = Picker
 
 --- Stored sessions plus the ones open in this Neovim (for the project scope,
---- only those running in Neovim's cwd), newest first.
+--- only those running in Neovim's cwd or another worktree of its repository,
+--- as the stored list has them), newest first.
 ---@param stored table[] SDKSessionInfo[]
 ---@param scope "project"|"all"
 ---@return claude_code.SessionEntry[]
 local function merge(stored, scope)
   local cwd = vim.fn.getcwd()
   return listing.merge(stored, function(s)
-    return scope == "all" or s.cwd == cwd
+    return scope == "all" or s.cwd == cwd or listing.root(s.cwd) == listing.root(cwd)
   end)
 end
 
@@ -267,12 +268,20 @@ function Picker:render()
   local win = self.wins.list
   local width = api.nvim_win_get_width(win)
   local current = sessions.current()
+  local cwd = vim.fn.getcwd()
   local lines, marks = {}, {}
   for i, entry in ipairs(self.shown) do
     local glyph, hl = status(entry)
     local right = ago(entry.last_used)
-    if self.state.scope == "all" and entry.cwd then
-      right = vim.fn.fnamemodify(entry.cwd, ":t") .. " · " .. right
+    -- Which project it's in or, listing this project, which of its worktrees.
+    local where
+    if self.state.scope == "all" then
+      where = entry.cwd and vim.fn.fnamemodify(entry.cwd, ":t")
+    else
+      where = listing.tree(entry, cwd)
+    end
+    if where then
+      right = where .. " · " .. right
     end
     if current and entry.live == current then
       right = "current · " .. right

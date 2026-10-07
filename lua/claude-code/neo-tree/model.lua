@@ -9,6 +9,7 @@
 -- from the CLI, say); the next render uses what's cached and reloads behind it.
 
 local control = require("claude-code.control")
+local listing = require("claude-code.listing")
 
 local M = {}
 
@@ -64,67 +65,14 @@ function M.load_sessions(cwd, callback)
   end)
 end
 
----@type table<string, string|false> cwd -> its project (false while resolving)
-local roots = {}
-
---- Resolve the project `cwd` belongs to: the main worktree of the repository
---- when `cwd` is the top of one of its worktrees, else `cwd` itself (a plain
---- directory, a subdirectory of a repository, a bare or removed worktree).
----@param cwd string
----@param on_done? fun() Resolve asynchronously, calling this when done.
-local function resolve(cwd, on_done)
-  roots[cwd] = false
-  local function finish(result)
-    local root = cwd
-    local top, common = (result.stdout or ""):match("^([^\n]+)\n([^\n]+)")
-    if
-      result.code == 0
-      and top
-      and vim.fs.normalize(top) == vim.fs.normalize(cwd)
-      and vim.fs.basename(common) == ".git"
-    then
-      root = vim.fs.dirname(common)
-    end
-    roots[cwd] = root
-  end
-  local cmd = { "git", "-C", cwd, "rev-parse", "--path-format=absolute", "--show-toplevel", "--git-common-dir" }
-  if not vim.uv.fs_stat(cwd) then
-    roots[cwd] = cwd
-    if on_done then
-      on_done()
-    end
-  elseif on_done then
-    vim.system(
-      cmd,
-      { text = true },
-      vim.schedule_wrap(function(result)
-        finish(result)
-        on_done()
-      end)
-    )
-  else
-    finish(vim.system(cmd, { text = true }):wait())
-  end
-end
-
---- The project `cwd`'s sessions are listed under. Until it's known, `cwd`:
---- it's resolved in the background (then the tree redraws), or straight away
---- when `sync`.
+--- The project `cwd`'s sessions are listed under (see listing.root). Until
+--- it's known, `cwd`: it's resolved in the background (then the tree redraws),
+--- or straight away when `sync`.
 ---@param cwd string
 ---@param sync? boolean
 ---@return string
 function M.root(cwd, sync)
-  if not cwd then
-    return cwd
-  end
-  if roots[cwd] == nil then
-    if sync then
-      resolve(cwd)
-    else
-      resolve(cwd, changed)
-    end
-  end
-  return roots[cwd] or cwd
+  return listing.root(cwd, not sync and changed or nil)
 end
 
 --- The projects to list: those on disk, each repository's worktrees folded

@@ -12,6 +12,11 @@ here and vice versa, names included.
 `:Claude sessions` opens a picker of this project's sessions: title, when it was last used, and a preview
 of the most recent exchanges.
 
+If the project is a git repository, the picker lists the sessions of all its worktrees: from the main
+repository you see sessions started in its worktrees, and from a worktree, those of the main repository and
+the other worktrees. Claude Code stores each worktree's sessions separately, so the picker finds them with
+`git worktree list`. A session from another worktree shows that worktree's directory name next to its time.
+
 | Key | |
 |---|---|
 | Type | Filter |
@@ -43,7 +48,8 @@ require("neo-tree").setup({
 Then `:Neotree claude_sessions` (or `:Neotree toggle claude_sessions`) opens it in the file tree's place;
 with neo-tree's `source_selector`, it gets a tab next to Files. The current project is listed first and
 expanded. Other projects load their sessions when expanded. A git repository's worktrees aren't listed as
-projects of their own: their sessions are listed under the main worktree, as the picker lists them.
+projects of their own: their sessions are listed under the main worktree, as the picker lists them, with the
+worktree's directory name next to their time.
 
 | Key | |
 |---|---|
