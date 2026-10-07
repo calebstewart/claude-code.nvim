@@ -193,7 +193,8 @@ local function release_tree(session)
   if not worktree.enabled() or session:is_placeholder() then
     return
   end
-  worktree.release_session(session.id, function(name, failed)
+  local id = session.id
+  worktree.release_session(id, function(name, failed)
     if failed then
       local what = name and ("worktree %s"):format(name) or "its worktree"
       vim.notify(
@@ -201,7 +202,14 @@ local function release_tree(session)
         vim.log.levels.WARN
       )
     end
-  end)
+  end, {
+    -- Reopened (e.g. from the session picker) before the release ran: it's a
+    -- new Session with the same id, and `wt` keys the claim by id, so the
+    -- release would drop the reopened session's claim.
+    keep = function()
+      return M.find(id) ~= nil
+    end,
+  })
 end
 
 --- End a session and remove it from Neovim (its transcript stays on disk), and

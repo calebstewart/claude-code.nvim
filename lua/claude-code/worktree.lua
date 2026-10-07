@@ -563,23 +563,51 @@ function M.reclaim(id, tree, cwd, callback)
   end)
 end
 
+---@class claude_code.WtReleaseOpts
+---@field keep? fun(): boolean Whether session `id` should keep its tree after all, e.g. it was reopened in this Neovim since it was closed. Checked just before `wt release` runs, which is then skipped, and again once it has run, when the tree is claimed back.
+
 --- Release whichever tree session `id` holds, in any project, acting as that
 --- session (`--session`, with Neovim's pid). Found from `wt list --all-projects`
 --- by its holder, not from the session's directory: a session may hold a tree
 --- other than the one it runs in. `wt` gives a session at most one tree.
+---
+--- `wt` keys a claim by session id, so a session reopened with the same id
+--- would lose its claim to a release meant for when it was closed. With
+--- `opts.keep`, the release is skipped when it returns true before `wt release`
+--- runs, and undone (the tree claimed again as `id`) when it returns true only
+--- once `wt release` has run. A failed re-claim is reported.
 ---@param id string
----@param callback fun(name: string?, result: claude_code.WtResult?) `name` is nil when the session held nothing; `result` is the failed `wt` call, if any.
-function M.release_session(id, callback)
+---@param callback fun(name: string?, result: claude_code.WtResult?) `name` is nil when the session held nothing or kept its tree; `result` is the failed `wt` call, if any.
+---@param opts? claude_code.WtReleaseOpts
+function M.release_session(id, callback, opts)
+  local keep = opts and opts.keep or function()
+    return false
+  end
   M.run({ "list", "--all-projects" }, {}, function(listed)
     if not listed.ok then
       return callback(nil, listed)
     end
+    if keep() then
+      return callback(nil)
+    end
     for _, project in ipairs(listed.data or {}) do
       for _, tree in ipairs(project.trees or {}) do
         if type(tree.holder) == "table" and tree.holder.session == id then
-          local opts = { cwd = tree.root or project.root, session = { id = id, pid = vim.fn.getpid() } }
-          M.run({ "release", tree.name }, opts, function(result)
-            callback(tree.name, not result.ok and result or nil)
+          local session = { id = id, pid = vim.fn.getpid() }
+          local cwd = tree.root or project.root
+          M.run({ "release", tree.name }, { cwd = cwd, session = session }, function(result)
+            if not (result.ok and keep()) then
+              return callback(tree.name, not result.ok and result or nil)
+            end
+            -- Reopened while `wt release` ran: give the tree back. Nobody holds
+            -- it now, unless another session took it in the meantime, which
+            -- is only reported (no --take-over).
+            M.run({ "claim", tree.name }, { cwd = cwd, session = session }, function(claimed)
+              if not claimed.ok then
+                M.report(claimed, tree.name)
+              end
+              callback(nil)
+            end)
           end)
           return
         end
