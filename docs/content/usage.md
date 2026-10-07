@@ -88,7 +88,9 @@ Images larger than the API accepts are shrunk first, with `sips` on macOS or Ima
 ## Running a command yourself
 
 `!command` runs a shell command as in the CLI's bash mode: in the session's directory, without going
-through Claude and without a permission prompt.
+through Claude and without a permission prompt. It sees the same environment as Claude's own commands:
+the [`env`](@/configuration.md#env) option and, with the [worktree integration](@/configuration.md#worktrees),
+the tree's environment and the session's `wt` identity.
 
 It shows in the transcript like a tool call — <kbd>Tab</kbd> expands the output — and the command and its
 output are added to the conversation. When it exits, Claude responds; interrupt it with <kbd>C-c</kbd> and

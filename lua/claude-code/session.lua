@@ -41,6 +41,7 @@ local worktree = require("claude-code.worktree")
 ---@field private held claude_code.Held Messages from other sessions awaiting delivery.
 ---@field private messaging boolean Has messaged, or been messaged by, another session: kept running while idle so replies reach it.
 ---@field private suspending boolean
+---@field private env? table<string, string> Extra environment the running process was started with (see environment()).
 ---@field private pending_title? string Rename to apply once the transcript exists.
 ---@field private in_reply boolean The current turn already has a "Claude" header.
 ---@field private reply_has_text boolean
@@ -309,6 +310,7 @@ function Session:start()
   })
   self.sidecar = sidecar
   self.started_mode = self.mode
+  self.env = self:environment()
   self.chat:set_status({ activity = self.busy and "Thinking" or "Starting", stopped = false, mode = self.mode })
   sidecar:start({
     type = "init",
@@ -323,7 +325,7 @@ function Session:start()
     name = self.named and self.title or nil,
     inbound = config.options.messaging.inbound,
     prompt_suggestions = config.options.prompt_suggestions,
-    env = self:environment(),
+    env = self.env,
   })
 end
 
@@ -532,7 +534,12 @@ function Session:run_shell(command)
   if not self.busy then
     self.chat:set_status({ activity = "Running !" .. command:gsub("\n.*", " …") })
   end
-  shell.job = vim.system({ vim.o.shell, vim.o.shellcmdflag, command }, { cwd = self.cwd, text = true }, function(result)
+  -- The same environment Claude's own commands get. Worked out afresh when the
+  -- process isn't running (suspended, or never started), rather than reusing
+  -- what it last started with.
+  local env = self:running() and self.env or self:environment()
+  local opts = { cwd = self.cwd, text = true, env = env }
+  shell.job = vim.system({ vim.o.shell, vim.o.shellcmdflag, command }, opts, function(result)
     vim.schedule(function()
       self:finish_shell(command, shell, result)
     end)
