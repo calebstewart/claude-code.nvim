@@ -109,6 +109,10 @@ CLI moves a session whose directory changes, so it resumes there from then on.
 
 Deleting such a session works as usual.
 
+Removing a `wt` tree from the [tree picker](@/configuration.md#picking-a-tree) closes the sessions open here
+that run in it (or hold it) before the directory goes, so this mostly happens for trees removed some other
+way.
+
 ## Names
 
 A new session's name is saved to disk after its first turn, and unnamed sessions pick up Claude Code's

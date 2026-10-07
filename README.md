@@ -260,6 +260,7 @@ and vice versa, names included.
 | `:Claude sessions` | Pick a session to switch to or resume |
 | `:Claude new [name]` | Start a new session (asks for a name if none is given; leave it empty for none) |
 | `:Claude work [text]` | With the worktree skill's `wt`: get a tree for a story, branch or description and open a session in it |
+| `:Claude trees [name]` | With `wt`: pick a tree to open or resume a session in, claim, release or remove |
 | `:Claude rename [name]` | Rename the current session (asks if no name is given) |
 | `:Claude next` / `:Claude prev` | Cycle through the sessions open in this Neovim |
 | `:Claude mode [mode]` | Set the current session's permission mode (pick from a list if none is given) |
@@ -299,8 +300,8 @@ Neovim (Lua) ─────┤
 - **UI** (`lua/claude-code/ui/`): `chat.lua` (layout, keymaps, status), `transcript.lua` (append-only markdown
   buffer; headers, tool status, output and footers are extmarks so the text stays plain markdown), `prompt.lua`,
   `permission.lua` (permission cards), `question.lua` (question dialog), `sessions.lua` (session picker, on
-  `listing.lua`, which the neo-tree source in `neo-tree/` shares),
-  `input.lua`, `markdown.lua` (decoration provider), `tables.lua` (aligned tables), `tools.lua`, `welcome.lua`, `icons.lua` and
+  `listing.lua`, which the neo-tree source in `neo-tree/` shares), `trees.lua` (the `wt` tree picker;
+  its actions are in the core's `trees.lua`), `input.lua`, `markdown.lua` (decoration provider), `tables.lua` (aligned tables), `tools.lua`, `welcome.lua`, `icons.lua` and
   `highlights.lua`.
 
 The Agent SDK normally brings its own platform-specific Claude binary, which can't be bundled into a single

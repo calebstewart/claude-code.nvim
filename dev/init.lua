@@ -45,6 +45,7 @@ end
 map("<leader>cc", "<cmd>Claude toggle<cr>", "toggle chat")
 map("<leader>cs", "<cmd>Claude sessions<cr>", "sessions")
 map("<leader>cn", "<cmd>Claude new<cr>", "new session")
+map("<leader>ct", "<cmd>Claude trees<cr>", "wt trees")
 map("<leader>ci", "<cmd>Claude interrupt<cr>", "interrupt")
 map("<leader>cq", "<cmd>Claude stop<cr>", "stop session")
 map("<leader>cd", "<cmd>Claude deliver<cr>", "deliver held messages")
