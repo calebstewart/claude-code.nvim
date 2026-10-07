@@ -596,6 +596,20 @@ function Session:finish_shell(command, shell, result)
   -- is mid-turn; then it's just context for the next turn.
   local respond = config.options.shell.respond and not shell.killed and not self.busy
   self:ensure_running()
+  if not self:running() then
+    -- Couldn't start. Usually its directory is gone (often this very command removed it),
+    -- and start() has offered to move the session; the process can also fail to spawn
+    -- (e.g. a bad `claude` path with the direct transport). The output is above, so drop
+    -- the message rather than hold it. The queue goes back to the prompt, as when the
+    -- process exits, so nothing restarts it (and asks again) behind the user's back.
+    if vim.fn.isdirectory(self.cwd) == 0 then
+      self:note("Not sent to Claude: the session's working directory no longer exists.")
+    else
+      self:note("Not sent to Claude: the session couldn't start.")
+    end
+    self:return_queue()
+    return
+  end
   -- The CLI's tags, in one message: Claude Code treats a message that starts with
   -- <bash-stdout> as local output and never queries the model for it.
   self.sidecar:send({
