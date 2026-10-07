@@ -100,6 +100,26 @@ function M.new(name)
   })
 end
 
+--- Work on a story, branch or description in its own `wt` tree: create the tree
+--- (`wt new`), or claim it when it exists, then open a session there. With no
+--- text, asks for it. `wt` runs in the background; needs the worktree integration.
+---@param text? string
+---@param opts? claude_code.WorkOpts
+function M.work(text, opts)
+  if text and vim.trim(text) ~= "" then
+    require("claude-code.work").work(text, opts)
+    return
+  end
+  require("claude-code.ui.input").open({
+    title = "Work on (story id, branch or description)",
+    on_submit = function(input)
+      if input ~= "" then
+        require("claude-code.work").work(input, opts)
+      end
+    end,
+  })
+end
+
 --- Rename the current session. With no name, asks for one.
 ---@param name? string
 function M.rename(name)

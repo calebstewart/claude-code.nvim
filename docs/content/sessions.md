@@ -80,7 +80,8 @@ into its own transcript, so you can come back to a finished turn.
 A new session you leave untouched is only a placeholder: switching to another session from anywhere (the
 picker, the sidebar, `:Claude next`, `:Claude new`) closes it, and it disappears from the lists. It counts
 as used, and stays, once it has a name, a message or shell command in its transcript, or a draft in its
-prompt.
+prompt. A session opened by [`:Claude work`](@/configuration.md#working-on-something-in-a-tree) counts as used
+from the start, since it holds a tree.
 
 ## Suspending and resuming
 

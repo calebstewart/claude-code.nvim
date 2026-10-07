@@ -254,8 +254,9 @@ With it on, `:checkhealth claude-code` has a section for `wt`, and:
   Without this, `wt` would see the stopped process and treat the tree as abandoned.
 - **Closing a session releases its tree.** When you close a session (`:Claude stop`, `/exit`, deleting it),
   the plugin releases the tree it holds, in the background, wherever that tree is. Suspending doesn't. Nor
-  does quitting Neovim: `wt` then sees the claim's process gone and treats the tree as ended, and resuming
-  the session later lets it claim the tree again without asking.
+  does quitting Neovim: `wt` then sees the claim's process gone and treats the tree as ended. When you
+  resume the session later in its tree, the plugin claims the tree again for it, with the new Neovim's pid,
+  as it starts.
 - **The chat's bar shows the session's tree.** When the session's directory is inside a `wt` tree, the bar
   above the transcript shows the tree's name and slot after the session's name, e.g. `fix-login · slot 2`,
   in the [`Worktree`](@/appearance.md#chrome) highlight. The plugin asks `wt` in the background when the
@@ -286,6 +287,29 @@ The [`env`](#env) option is applied last, so it overrides any of these variables
 Finding the tree costs a `wt list`, around 100 ms, which the plugin waits for when the process starts. It
 only runs it for a directory inside a linked git worktree (where `.git` is a file), since a tree is always
 one, and reuses the result for a few seconds.
+
+### Working on something in a tree
+
+`:Claude work [text]` (or `require("claude-code").work(text)`) gets a tree and opens a session in it. `text`
+is anything `wt new` takes: a story id, a branch, or a description. With no text, it asks.
+
+- If a tree in the project (the one containing Neovim's cwd) already has that name or branch, the plugin
+  claims it with `wt claim`. Otherwise it runs `wt new "<text>"`, which creates the tree, runs the project's
+  setup hook and claims it. When `wt new` finds the tree already exists (say, a story id whose branch already
+  has a tree), the plugin claims that tree instead.
+- **It doesn't block the editor.** `wt` runs in the background, which matters because setup hooks can take a
+  while. You get a notification when it starts and when the session opens. Running the same command again
+  while it's still working only tells you so.
+- **The claim belongs to the new session.** The plugin picks the session's id first and claims as that id with
+  Neovim's pid, the identity the session's process then gets (see above). So the claim is live while the
+  session is open here and is released when you close it, like any other.
+- **When another session holds the tree:** if that session is open in this Neovim, it's shown instead (and
+  its claim refreshed, if it had lapsed). Otherwise, if it's still running, you're told which one, and if it
+  has ended, you're asked whether to take the tree over, and the plugin retries with `--take-over` if you say
+  yes.
+- **Failures** show `wt`'s reason and its hint, e.g. a refused claim or a failed setup hook. A tree whose
+  setup failed stays registered, as `wt` leaves it, but isn't left held: the plugin releases it.
+- Without `wt`, or with `worktree.enabled = false`, the command just says so and does nothing else.
 
 ### worktree.enabled
 

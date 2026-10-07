@@ -7,7 +7,7 @@ description = "The :Claude subcommands and the matching Lua API."
 ## :Claude
 
 `:Claude` takes a subcommand; with none, it opens the chat. Completion covers the subcommands, file paths
-after `image`, and mode names after `mode`.
+after `image`, mode names after `mode`, and the project's `wt` tree names and branches after `work`.
 
 | Command | |
 |---|---|
@@ -19,6 +19,7 @@ after `image`, and mode names after `mode`.
 | `:Claude send-now` | Interrupt Claude and send the [queued messages](@/usage.md#queueing-messages) right away |
 | `:Claude sessions` | Pick a session to switch to or resume |
 | `:Claude new [name]` | Start a new session (asks for a name if none is given; leave it empty for none) |
+| `:Claude work [text]` | Get a [`wt` tree](@/configuration.md#working-on-something-in-a-tree) for a story id, branch or description, creating it or claiming the existing one, and open a session in it (asks if no text is given) |
 | `:Claude rename [name]` | Rename the current session (asks if no name is given) |
 | `:Claude relocate [dir]` | Move the current session to another working directory (asks if none is given). See [moved directories](@/sessions.md#moved-or-deleted-directories) |
 | `:Claude next` / `:Claude prev` | Cycle through the sessions open in this Neovim |
@@ -44,6 +45,7 @@ need arguments or conditions.
 | `stop()` | End the current session and close it. It stays on disk |
 | `sessions()` | Open the session picker |
 | `new(name?)` | Start a new session. With no name, asks for one |
+| `work(text?, opts?)` | Get a `wt` tree for `text` and open a session in it. With no text, asks for it. `opts.cwd` picks the project (default: Neovim's cwd) |
 | `rename(name?)` | Rename the current session. With no name, asks for one |
 | `relocate(dir?)` | Move the current session to another working directory. With no directory, asks for one |
 | `mode(mode?)` | Set the permission mode. With no mode, pick one from a list |

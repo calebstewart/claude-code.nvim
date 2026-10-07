@@ -416,6 +416,10 @@ end
 --- session open, including while its process is stopped for being idle.
 --- WT_SESSION_ID pins the id too, over any WT_SESSION_ID Neovim inherited.
 ---
+--- When the tree is the session's own but its claim has ended (the session was
+--- resumed in a new Neovim, so the claim has the old Neovim's pid), it's
+--- claimed again with this Neovim's pid, in the background (M.reclaim).
+---
 --- Synchronous, but only runs `wt` when `dir` is in a linked git worktree.
 ---@param session_id string
 ---@param dir string
@@ -433,7 +437,130 @@ function M.session_env(session_id, dir)
   end
   env.WT_PID = tostring(vim.fn.getpid())
   env.WT_SESSION_ID = session_id
+  M.reclaim(session_id, tree)
   return env, err
+end
+
+--- Who holds a tree, for messages: the session's title when it's open in this
+--- Neovim, else `wt`'s label for it, else the start of its id.
+---@param holder? table A tree's `holder`, or `data.holder` of a failed claim.
+---@return string
+function M.describe_holder(holder)
+  if type(holder) ~= "table" or not holder.session then
+    return "nobody"
+  end
+  local sessions = package.loaded["claude-code.sessions"]
+  local open = sessions and sessions.find(holder.session)
+  if open then
+    return ("“%s” (open in this Neovim)"):format(open.title or "New session")
+  end
+  if type(holder.label) == "string" and holder.label ~= "" then
+    return ("“%s”"):format(holder.label)
+  end
+  return ("session %s"):format(tostring(holder.session):sub(1, 8))
+end
+
+--- Show why a `wt` command failed: who holds the tree (held), or `wt`'s reason
+--- and hint.
+---@param result claude_code.WtResult
+---@param what? string The tree, for the message, e.g. its name.
+function M.report(result, what)
+  what = what or (result.data and result.data.name) or "the worktree"
+  local message
+  if result.outcome == "held" and result.data and result.data.holder then
+    message = ("%s is held by %s, which is still running"):format(what, M.describe_holder(result.data.holder))
+  elseif result.outcome == "refused" then
+    message = ("wt refused: %s"):format(result.error or "no reason given")
+  else
+    message = result.error or ("wt exited with code %d"):format(result.code)
+  end
+  if result.hint and result.outcome ~= "held" then
+    message = message .. "\nhint: " .. result.hint
+  end
+  vim.notify("claude-code: " .. message, result.outcome == "held" and vim.log.levels.WARN or vim.log.levels.ERROR)
+end
+
+---@class claude_code.WtClaimOpts
+---@field what? string The tree, for messages, e.g. its name.
+---@field on_holder? fun(result: claude_code.WtResult): boolean? Called when another session holds the tree, live (exit 3) or ended (exit 4), before reporting or asking; return true when it's dealt with. E.g. the holder is a session open in this Neovim, whose claim only looks ended because it was resumed in a new Neovim.
+
+--- Run a `wt` command that claims a tree (`claim`, `new`, `adopt --claim`),
+--- taking the decisions `wt` leaves to its caller in the editor:
+---
+--- - held by a live session (exit 3): report who holds it;
+--- - held by a session that has ended (exit 4): ask, then run it again with
+---   `--take-over`;
+---   (either of these only when `opts.on_holder` doesn't deal with it first)
+--- - refused (exit 5), or any other failure: show `wt`'s reason and hint.
+---
+--- `callback` gets the successful result, or nil when it failed (already
+--- reported) or the take-over was declined.
+---@param run fun(take_over: boolean, done: fun(result: claude_code.WtResult)) Runs the command, in the background; with `take_over`, adds `--take-over`.
+---@param opts? claude_code.WtClaimOpts
+---@param callback fun(result: claude_code.WtResult?)
+function M.claim_interactively(run, opts, callback)
+  opts = opts or {}
+  local function handle(result, took_over)
+    if result.ok then
+      return callback(result)
+    end
+    local what = opts.what or (result.data and result.data.name) or "the worktree"
+    local by_holder = result.outcome == "held" or (result.outcome == "confirm" and not took_over)
+    if by_holder and opts.on_holder and opts.on_holder(result) then
+      return callback(nil)
+    end
+    if result.outcome == "confirm" and not took_over then
+      local holder = result.data and result.data.holder
+      local prompt = ("%s was last used by %s, which has ended. Take it over?"):format(what, M.describe_holder(holder))
+      vim.ui.select({ "Take it over", "Cancel" }, { prompt = prompt }, function(choice)
+        if choice == "Take it over" then
+          run(true, function(again)
+            handle(again, true)
+          end)
+        else
+          vim.notify(("claude-code: left %s to its previous session"):format(what))
+          callback(nil)
+        end
+      end)
+      return
+    end
+    M.report(result, what)
+    callback(nil)
+  end
+  run(false, function(result)
+    handle(result, false)
+  end)
+end
+
+--- Claim `tree` again as session `id` with Neovim's pid, when `wt` records it as
+--- that session's but with a process that has ended: the session was resumed
+--- in a new Neovim (its claim has the old Neovim's pid, see M.session_env).
+--- `wt` grants it without `--take-over`, since the claim is already the
+--- session's. Does nothing for a tree held by another session, or by nobody.
+--- Runs in the background; a failure is only reported.
+---@param id string
+---@param tree? table The tree's `wt list` entry (or a failed claim's `data`, with `name` and `holder`).
+---@param cwd? string Where to run `wt` (default: the tree's `root`).
+---@param callback? fun(result: claude_code.WtResult?) The claim's result, or nil when there was nothing to do.
+function M.reclaim(id, tree, cwd, callback)
+  local holder = tree and tree.holder
+  if type(holder) ~= "table" or holder.session ~= id or holder.state ~= "ended" then
+    if callback then
+      vim.schedule(function()
+        callback(nil)
+      end)
+    end
+    return
+  end
+  local opts = { cwd = cwd or tree.root or tree.path, session = { id = id, pid = vim.fn.getpid() } }
+  M.run({ "claim", tree.name }, opts, function(result)
+    if not result.ok then
+      M.report(result, tree.name)
+    end
+    if callback then
+      callback(result)
+    end
+  end)
 end
 
 --- Release whichever tree session `id` holds, in any project, acting as that
