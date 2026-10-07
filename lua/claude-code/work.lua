@@ -102,7 +102,7 @@ function M.work(text, opts)
   --- Open the session in the tree it now holds.
   ---@param tree table `wt`'s description of the tree.
   ---@param how string "created" or "claimed"
-  local function open(tree, how)
+  local function open_now(tree, how)
     finish()
     local ok, session = pcall(sessions.new, nil, { cwd = tree.path, id = id, claimed = true })
     if ok and session then
@@ -121,6 +121,17 @@ function M.work(text, opts)
       if not result.ok then
         worktree.report(result, tree.name)
       end
+    end)
+  end
+
+  --- Open the session once a background `wt list` of the tree is cached: the
+  --- session's start looks its tree up synchronously (worktree.session_env),
+  --- and the `wt new`/`claim` that just ran cleared the cache.
+  ---@param tree table
+  ---@param how string
+  local function open(tree, how)
+    worktree.list(tree.path, function()
+      open_now(tree, how)
     end)
   end
 
