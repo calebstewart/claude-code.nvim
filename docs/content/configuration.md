@@ -51,6 +51,8 @@ the defaults with `vim.tbl_deep_extend("force", …)`, so a partial table only o
     inbound = nil,           -- messages from your other Claude sessions: "accept" | "hold" | "refuse";
                              -- nil uses Claude Code's settings (`crossSessionInbound`)
   },
+  env = nil,                 -- extra environment for each session's claude process: a table, or a
+                             -- function(session) returning one, called whenever the process starts
 }
 ```
 
@@ -74,6 +76,28 @@ reads transcripts itself, so Node is never started. See [Architecture](@/archite
 
 `string?`, default `nil`. Path to the Claude Code executable. When `nil` the plugin resolves `claude` on
 `$PATH` via `vim.fn.exepath`.
+
+### env
+
+`table<string, string> | function | nil`, default `nil`. Extra environment variables for each session's
+`claude` process, merged over Neovim's own. Claude Code passes them on to the commands it runs, so this is the
+place for anything a session's tools should see.
+
+A function is called every time a session's process starts, including when a session that was stopped for
+being idle resumes, so its result can depend on the session. It receives `{ session_id, cwd, title }` and
+returns a table (or `nil` for nothing extra):
+
+```lua
+opts = {
+  env = function(session)
+    if session.cwd:find("/work/", 1, true) then
+      return { AWS_PROFILE = "work" }
+    end
+  end,
+}
+```
+
+Values must be strings or numbers. Variables can be added or overridden, but not removed.
 
 ## Conversation
 

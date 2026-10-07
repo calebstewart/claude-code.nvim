@@ -322,7 +322,38 @@ function Session:start()
     name = self.named and self.title or nil,
     inbound = config.options.messaging.inbound,
     prompt_suggestions = config.options.prompt_suggestions,
+    env = self:environment(),
   })
+end
+
+--- Extra environment for the process, from the `env` option. Worked out on
+--- every start, so a function sees the session as it is now (its cwd may have
+--- moved) and a restart after an idle suspend picks up any change.
+---@private
+---@return table<string, string>?
+function Session:environment()
+  local env = config.options.env
+  if type(env) == "function" then
+    local ok, result = pcall(env, { session_id = self.id, cwd = self.cwd, title = self.title })
+    if not ok then
+      vim.notify("claude-code: `env` failed: " .. tostring(result), vim.log.levels.ERROR)
+      return nil
+    end
+    env = result
+  end
+  if type(env) ~= "table" then
+    return nil
+  end
+  local out = {}
+  for name, value in pairs(env) do
+    if type(name) == "string" and (type(value) == "string" or type(value) == "number") then
+      out[name] = tostring(value)
+    else
+      vim.notify(("claude-code: ignoring `env` entry %s"):format(vim.inspect(name)), vim.log.levels.WARN)
+    end
+  end
+  -- An empty table encodes as a JSON array; leave the field out instead.
+  return next(out) and out or nil
 end
 
 --- Ask where to move a session whose working directory is gone.

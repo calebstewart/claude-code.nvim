@@ -121,6 +121,8 @@ Defaults:
     max_output = 30000,      -- characters of output given to Claude
   },
   prompt_suggestions = true, -- suggest a next prompt after each turn
+  env = nil,                 -- extra environment for each session's claude process: a table, or a
+                             -- function(session) returning one, called whenever the process starts
 }
 ```
 
