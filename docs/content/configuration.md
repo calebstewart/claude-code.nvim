@@ -51,6 +51,10 @@ the defaults with `vim.tbl_deep_extend("force", …)`, so a partial table only o
     inbound = nil,           -- messages from your other Claude sessions: "accept" | "hold" | "refuse";
                              -- nil uses Claude Code's settings (`crossSessionInbound`)
   },
+  worktree = {               -- the worktree skill's `wt` CLI (optional)
+    enabled = nil,           -- nil: on when `wt` is found; false: off
+    wt = nil,                -- path to `wt`; nil looks only where the skill installs it
+  },
   env = nil,                 -- extra environment for each session's claude process: a table, or a
                              -- function(session) returning one, called whenever the process starts
 }
@@ -229,6 +233,25 @@ differ in whether they bypass permission prompts, in which case they're held.
 - `"hold"` holds each one until you [deliver it](@/sessions.md#held-messages). Held this way, a message
   doesn't expire.
 - `"refuse"` drops them, and the sender is told.
+
+## Worktrees
+
+Optional integration with `wt`, the CLI behind the [worktree skill](https://calebstew.art/ai-slop/skills/worktree/),
+which gives each piece of work its own git worktree and test environment. The plugin only runs `wt` and reads
+its output; it never names, sets up or removes trees on its own. Without `wt` installed, nothing changes.
+
+So far this only adds a section to `:checkhealth claude-code`; editor features build on it.
+
+### worktree.enabled
+
+`boolean | nil`, default `nil`. `nil` turns the integration on when `wt` is found, `false` turns it off, and
+`true` turns it on and makes `:checkhealth` warn if `wt` is missing.
+
+### worktree.wt
+
+`string?`, default `nil`. Path to `wt`, or a command name on `$PATH`. When `nil`, the plugin looks only where
+the skill installs it, `~/.claude/skills/worktree/bin/wt` (under `$CLAUDE_CONFIG_DIR` if that is set), and not
+on `$PATH`, because other tools are called `wt` too.
 
 ## Shell
 

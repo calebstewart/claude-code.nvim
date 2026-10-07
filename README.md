@@ -121,6 +121,10 @@ Defaults:
     max_output = 30000,      -- characters of output given to Claude
   },
   prompt_suggestions = true, -- suggest a next prompt after each turn
+  worktree = {               -- the worktree skill's `wt` CLI (optional)
+    enabled = nil,           -- nil: on when `wt` is found; false: off
+    wt = nil,                -- path to `wt`; nil looks only where the skill installs it
+  },
   env = nil,                 -- extra environment for each session's claude process: a table, or a
                              -- function(session) returning one, called whenever the process starts
 }
