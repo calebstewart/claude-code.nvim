@@ -436,6 +436,95 @@ function M.session_env(session_id, dir)
   return env, err
 end
 
+--- Who holds a tree, for messages: the session's title when it's open in this
+--- Neovim, else `wt`'s label for it, else the start of its id.
+---@param holder? table A tree's `holder`, or `data.holder` of a failed claim.
+---@return string
+function M.describe_holder(holder)
+  if type(holder) ~= "table" or not holder.session then
+    return "nobody"
+  end
+  local sessions = package.loaded["claude-code.sessions"]
+  local open = sessions and sessions.find(holder.session)
+  if open then
+    return ("“%s” (open in this Neovim)"):format(open.title or "New session")
+  end
+  if type(holder.label) == "string" and holder.label ~= "" then
+    return ("“%s”"):format(holder.label)
+  end
+  return ("session %s"):format(tostring(holder.session):sub(1, 8))
+end
+
+--- Show why a `wt` command failed: who holds the tree (held), or `wt`'s reason
+--- and hint.
+---@param result claude_code.WtResult
+---@param what? string The tree, for the message, e.g. its name.
+function M.report(result, what)
+  what = what or (result.data and result.data.name) or "the worktree"
+  local message
+  if result.outcome == "held" and result.data and result.data.holder then
+    message = ("%s is held by %s, which is still running"):format(what, M.describe_holder(result.data.holder))
+  elseif result.outcome == "refused" then
+    message = ("wt refused: %s"):format(result.error or "no reason given")
+  else
+    message = result.error or ("wt exited with code %d"):format(result.code)
+  end
+  if result.hint and result.outcome ~= "held" then
+    message = message .. "\nhint: " .. result.hint
+  end
+  vim.notify("claude-code: " .. message, result.outcome == "held" and vim.log.levels.WARN or vim.log.levels.ERROR)
+end
+
+---@class claude_code.WtClaimOpts
+---@field what? string The tree, for messages, e.g. its name.
+---@field on_held? fun(result: claude_code.WtResult): boolean? Called on exit 3 before it's reported; return true when it's dealt with (not reported).
+
+--- Run a `wt` command that claims a tree (`claim`, `new`, `adopt --claim`),
+--- taking the decisions `wt` leaves to its caller in the editor:
+---
+--- - held by a live session (exit 3): report who holds it;
+--- - held by a session that has ended (exit 4): ask, then run it again with
+---   `--take-over`;
+--- - refused (exit 5), or any other failure: show `wt`'s reason and hint.
+---
+--- `callback` gets the successful result, or nil when it failed (already
+--- reported) or the take-over was declined.
+---@param run fun(take_over: boolean, done: fun(result: claude_code.WtResult)) Runs the command, in the background; with `take_over`, adds `--take-over`.
+---@param opts? claude_code.WtClaimOpts
+---@param callback fun(result: claude_code.WtResult?)
+function M.claim_interactively(run, opts, callback)
+  opts = opts or {}
+  local function handle(result, took_over)
+    if result.ok then
+      return callback(result)
+    end
+    local what = opts.what or (result.data and result.data.name) or "the worktree"
+    if result.outcome == "confirm" and not took_over then
+      local holder = result.data and result.data.holder
+      local prompt = ("%s was last used by %s, which has ended. Take it over?"):format(what, M.describe_holder(holder))
+      vim.ui.select({ "Take it over", "Cancel" }, { prompt = prompt }, function(choice)
+        if choice == "Take it over" then
+          run(true, function(again)
+            handle(again, true)
+          end)
+        else
+          vim.notify(("claude-code: left %s to its previous session"):format(what))
+          callback(nil)
+        end
+      end)
+      return
+    end
+    if result.outcome == "held" and opts.on_held and opts.on_held(result) then
+      return callback(nil)
+    end
+    M.report(result, what)
+    callback(nil)
+  end
+  run(false, function(result)
+    handle(result, false)
+  end)
+end
+
 --- Release whichever tree session `id` holds, in any project, acting as that
 --- session (`--session`, with Neovim's pid). Found from `wt list --all-projects`
 --- by its holder, not from the session's directory: a session may hold a tree

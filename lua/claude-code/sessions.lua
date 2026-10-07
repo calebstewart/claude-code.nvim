@@ -110,11 +110,12 @@ end
 
 --- Start a new session and show it.
 ---@param title? string
----@param opts? { cwd?: string, show?: { here?: boolean } } `cwd`: run it there instead of Neovim's cwd.
+---@param opts? { cwd?: string, id?: string, claimed?: boolean, show?: { here?: boolean } } `cwd`: run it there instead of Neovim's cwd. `id`, `claimed`: see claude_code.SessionOpts.
 ---@return claude_code.Session?
 function M.new(title, opts)
   opts = opts or {}
-  local session = Session.new({ title = title ~= "" and title or nil, cwd = opts.cwd })
+  local session =
+    Session.new({ title = title ~= "" and title or nil, cwd = opts.cwd, id = opts.id, claimed = opts.claimed })
   if session then
     add(session)
     M.show(session, opts.show)
@@ -187,7 +188,8 @@ end
 ---@param session claude_code.Session
 local function release_tree(session)
   local worktree = require("claude-code.worktree")
-  -- An untouched placeholder has never run a prompt, so it can't have claimed one.
+  -- An untouched placeholder has never run a prompt, so it can't have claimed one
+  -- (a session opened for a tree it holds is never a placeholder).
   if not worktree.enabled() or session:is_placeholder() then
     return
   end

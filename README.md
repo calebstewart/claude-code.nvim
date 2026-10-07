@@ -259,6 +259,7 @@ and vice versa, names included.
 | `:Claude send-now` | Interrupt Claude and send the queued messages right away |
 | `:Claude sessions` | Pick a session to switch to or resume |
 | `:Claude new [name]` | Start a new session (asks for a name if none is given; leave it empty for none) |
+| `:Claude work [text]` | With the worktree skill's `wt`: get a tree for a story, branch or description and open a session in it |
 | `:Claude rename [name]` | Rename the current session (asks if no name is given) |
 | `:Claude next` / `:Claude prev` | Cycle through the sessions open in this Neovim |
 | `:Claude mode [mode]` | Set the current session's permission mode (pick from a list if none is given) |

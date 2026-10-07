@@ -31,6 +31,9 @@ local subcommands = {
   new = function(args)
     require("claude-code").new(args)
   end,
+  work = function(args)
+    require("claude-code").work(args)
+  end,
   rename = function(args)
     require("claude-code").rename(args)
   end,
@@ -74,6 +77,11 @@ end, {
     end
     if line:match("^%S+%s+relocate%s+") then
       return vim.fn.getcompletion(arg_lead, "dir")
+    end
+    if line:match("^%S+%s+work%s+%S*$") then
+      return vim.tbl_filter(function(name)
+        return vim.startswith(name, arg_lead)
+      end, require("claude-code.work").candidates(vim.fn.getcwd()))
     end
     if line:match("^%S+%s+mode%s+%S*$") then
       return vim.tbl_filter(function(mode)

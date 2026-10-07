@@ -15,6 +15,7 @@ local worktree = require("claude-code.worktree")
 
 ---@class claude_code.Session
 ---@field id string Claude session id (chosen up front for new sessions).
+---@field claimed? boolean Opened for a `wt` tree it already holds (`:Claude work`): never discarded as a placeholder.
 ---@field title? string Custom title, or Claude Code's summary.
 ---@field private named boolean `title` was chosen (not Claude Code's summary): it's also the name other sessions message this one by.
 ---@field cwd string
@@ -145,6 +146,14 @@ local DROPPED = {
 ---@field title? string Name for a new session.
 ---@field info? table SDKSessionInfo of a stored session to resume.
 ---@field cwd? string Directory for a new session to run in (default: Neovim's cwd).
+---@field id? string Id for a new session, chosen beforehand (see Session.new_id), e.g. to claim a `wt` tree as it.
+---@field claimed? boolean It already holds a `wt` tree (see Session.claimed).
+
+--- A fresh session id, for a new session whose id is needed before it's opened.
+---@return string
+function Session.new_id()
+  return uuid()
+end
 
 ---@param opts? claude_code.SessionOpts
 ---@return claude_code.Session?
@@ -158,7 +167,8 @@ function Session.new(opts)
   count = count + 1
   local info = opts.info
   local self = setmetatable({
-    id = info and info.sessionId or uuid(),
+    id = info and info.sessionId or opts.id or uuid(),
+    claimed = opts.claimed or nil,
     title = info and (info.customTitle or info.summary) or opts.title,
     named = (info and info.customTitle or opts.title) ~= nil,
     messaging = false,
@@ -253,9 +263,11 @@ end
 
 --- A new session nobody has used: unnamed, never written to disk, nothing
 --- in its transcript, and no draft in its prompt. Switching away from one
---- discards it (see sessions.show), so trying "new" costs nothing.
+--- discards it (see sessions.show), so trying "new" costs nothing. A session
+--- opened for a `wt` tree it holds isn't one: it was asked for, and has a claim.
 function Session:is_placeholder()
   return not self.persisted
+    and not self.claimed
     and not self.title
     and not self.pending_title
     and not self.busy
