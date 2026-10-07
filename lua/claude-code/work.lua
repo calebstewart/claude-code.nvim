@@ -124,29 +124,36 @@ function M.work(text, opts)
     end)
   end
 
-  ---@param result claude_code.WtResult
-  ---@return boolean
-  local function held_here(result)
-    local holder = result.data and result.data.holder
-    local session = holder and holder.session and sessions.find(holder.session)
-    if session then
-      notify(("%s is already open in “%s”"):format(result.data.name or text, session.title or "New session"))
-      sessions.show(session)
-      return true
+  --- When the tree's holder is a session open in this Neovim, show that session
+  --- instead. Its claim may look ended (exit 4) when it was resumed in a new
+  --- Neovim and still has the old one's pid: claim it again as that session
+  --- rather than offering to take the tree away from it.
+  ---@param name string
+  ---@return fun(result: claude_code.WtResult): boolean
+  local function held_here(name)
+    return function(result)
+      local holder = result.data and result.data.holder
+      local session = holder and holder.session and sessions.find(holder.session)
+      if session then
+        notify(("%s is already open in “%s”"):format(name, session.title or "New session"))
+        sessions.show(session)
+        worktree.reclaim(session.id, { name = name, holder = holder }, cwd)
+        return true
+      end
+      local other = holder and holder.session and pending[holder.session]
+      if other then
+        notify(("%s is being set up for “%s” already"):format(name, other), vim.log.levels.WARN)
+        return true
+      end
+      return false
     end
-    local other = holder and holder.session and pending[holder.session]
-    if other then
-      notify(("%s is being set up for “%s” already"):format(result.data.name or text, other), vim.log.levels.WARN)
-      return true
-    end
-    return false
   end
 
   ---@param name string
   local function claim(name)
     worktree.claim_interactively(function(take_over, done)
       worktree.run({ "claim", name, take_over and "--take-over" or nil }, { cwd = cwd, session = identity }, done)
-    end, { what = name, on_held = held_here }, function(result)
+    end, { what = name, on_holder = held_here(name) }, function(result)
       if result then
         open(result.data, "claimed")
       else
