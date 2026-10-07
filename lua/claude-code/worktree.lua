@@ -38,6 +38,7 @@ M.outcomes = {
 ---@field cwd? string Run as if started here (`-C`); default: Neovim's cwd.
 ---@field session? claude_code.WtSession Act for this session (`--session`, `--pid`).
 ---@field timeout? integer Milliseconds, when called without a callback (default 5000).
+---@field package on_exit? fun(done: vim.SystemCompleted) With a callback: called as the process exits, in a fast event (before `callback` is scheduled), so a synchronous caller can wait for it without running anything else.
 
 --- Commands that change which trees exist or who holds them.
 local MUTATING = { new = true, adopt = true, claim = true, release = true, rm = true, cleanup = true, setup = true }
@@ -60,8 +61,10 @@ local LIST_TTL_MS = 5000
 ---@type table<string, { at: integer, result: claude_code.WtResult }>
 local list_cache = {}
 
---- Asynchronous `wt list`s running, by directory, with the callbacks waiting on each.
----@type table<string, { at: integer, generation: integer, callbacks: fun(result: claude_code.WtResult)[] }>
+--- Asynchronous `wt list`s running, by directory, with the callbacks waiting on
+--- each. `done` is the finished process, set as soon as it exits (see M.list).
+---@alias claude_code.WtListRun { at: integer, generation: integer, callbacks: fun(result: claude_code.WtResult)[], done?: vim.SystemCompleted }
+---@type table<string, claude_code.WtListRun>
 local in_flight = {}
 
 --- Bumped by M.invalidate(). A `wt list` caches its result only if this hasn't
@@ -198,6 +201,9 @@ function M.run(args, opts, callback)
   end
 
   local ok, proc = pcall(vim.system, cmd, { text = true, env = ANONYMOUS }, callback and function(done)
+    if opts.on_exit then
+      opts.on_exit(done)
+    end
     vim.schedule(function()
       callback(finish(done))
     end)
@@ -260,44 +266,53 @@ function M.list(dir, callback, opts)
     return hit.result
   end
   local started = generation
-  local function store(result)
+  ---@param result claude_code.WtResult
+  ---@param at integer When the `wt list` that produced it started.
+  local function store(result, at)
     -- A fresh `wt list` can overtake an older one still running: the newer start wins.
     local newer = list_cache[dir]
-    if result.ok and generation == started and not (newer and newer.at > now) then
-      list_cache[dir] = { at = now, result = result }
+    if result.ok and generation == started and not (newer and newer.at > at) then
+      list_cache[dir] = { at = at, result = result }
     end
     return result
   end
   local running = in_flight[dir]
   local joinable = running and running.generation == generation and running.at >= oldest
   if not callback then
-    -- Wait for a background `wt list` that will do rather than start another,
-    -- e.g. when a new session starts while its chat's winbar looks the tree up.
     if joinable then
-      local joined
-      table.insert(running.callbacks, function(result)
-        joined = result
-      end)
+      -- Wait for the background `wt list` that will do rather than start
+      -- another (e.g. a new session starting while its chat's winbar looks the
+      -- tree up). Only fast events run meanwhile, as in a synchronous M.run: no
+      -- scheduled callbacks or autocmds, which could re-enter the caller.
       vim.wait(5000, function()
-        return joined ~= nil
-      end, 5)
-      if joined then
-        return joined
+        return running.done ~= nil
+      end, 5, true)
+      local done = running.done
+      if not done then
+        return failure("wt did not finish within 5000 ms")
       end
+      return store(M.parse(done.code, done.stdout, done.stderr), running.at)
     end
-    return store(M.run({ "list" }, { cwd = dir }) --[[@as claude_code.WtResult]])
+    return store(M.run({ "list" }, { cwd = dir }) --[[@as claude_code.WtResult]], now)
   end
   if joinable then
     table.insert(running.callbacks, callback)
     return nil
   end
+  ---@type claude_code.WtListRun
   running = { at = now, generation = generation, callbacks = { callback } }
   in_flight[dir] = running
-  M.run({ "list" }, { cwd = dir }, function(result)
+  local run_opts = {
+    cwd = dir,
+    on_exit = function(done)
+      running.done = done
+    end,
+  }
+  M.run({ "list" }, run_opts, function(result)
     if in_flight[dir] == running then
       in_flight[dir] = nil
     end
-    store(result)
+    store(result, running.at)
     for _, cb in ipairs(running.callbacks) do
       cb(result)
     end
