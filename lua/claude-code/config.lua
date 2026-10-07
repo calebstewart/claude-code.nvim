@@ -18,6 +18,12 @@ local M = {}
 ---@field shell { respond: boolean, max_output: integer } `!command` prompts: whether Claude responds once the command exits, and how much output (characters) it's given.
 ---@field prompt_suggestions boolean After each turn, suggest a next prompt (shown in the empty prompt; <Tab> takes it).
 ---@field messaging claude_code.MessagingConfig Messages between Claude sessions.
+---@field env? table<string, string>|fun(session: claude_code.EnvContext): table<string, string>? Extra environment for each session's claude process, merged over Neovim's. A function is called every time a session's process starts.
+
+---@class claude_code.EnvContext
+---@field session_id string
+---@field cwd string The session's working directory.
+---@field title? string
 
 ---@class claude_code.MessagingConfig
 ---@field inbound? "accept"|"hold"|"refuse" What sessions do with messages from your other Claude sessions (Claude Code's `crossSessionInbound`); nil uses your Claude Code settings.
@@ -72,6 +78,7 @@ M.defaults = {
   shell = { respond = true, max_output = 30000 },
   prompt_suggestions = true,
   messaging = { inbound = nil },
+  env = nil,
 }
 
 ---@type claude_code.Config

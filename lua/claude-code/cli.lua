@@ -95,7 +95,7 @@ function Cli:start(init)
       settings = init.inbound and vim.json.encode({ crossSessionInbound = init.inbound }) or nil,
     },
     -- system/session_state_changed: running and idle, whatever started the turn.
-    env = { CLAUDE_CODE_EMIT_SESSION_STATE_EVENTS = "1" },
+    env = vim.tbl_extend("force", init.env or {}, { CLAUDE_CODE_EMIT_SESSION_STATE_EVENTS = "1" }),
     on_ready = function(info)
       self.on_event({ type = "ready", session_id = session_id })
       self.on_event({ type = "commands", commands = info.commands or {} })

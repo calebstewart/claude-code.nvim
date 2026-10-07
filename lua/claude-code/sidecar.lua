@@ -15,6 +15,7 @@ local config = require("claude-code.config")
 ---@field name? string Name other Claude sessions use to message this one.
 ---@field inbound? "accept"|"hold"|"refuse" What to do with messages from other sessions; nil uses Claude Code's settings.
 ---@field prompt_suggestions? boolean Ask for a predicted next prompt after each turn.
+---@field env? table<string, string> Extra environment for the claude process, merged over Neovim's.
 
 ---@class claude_code.SidecarEvent
 ---@field type "ready"|"sdk"|"permission_request"|"permission_cancel"|"error"|"exit"|"response"

@@ -36937,6 +36937,7 @@ async function run(init) {
       },
       env: {
         ...process.env,
+        ...init.env,
         // system/session_state_changed: running and idle, whatever started the turn.
         CLAUDE_CODE_EMIT_SESSION_STATE_EVENTS: "1"
       }

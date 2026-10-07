@@ -23,6 +23,8 @@ export interface InitRequest {
   inbound?: "accept" | "hold" | "refuse";
   /** Ask for a predicted next prompt after each turn (a `prompt_suggestion` message). */
   prompt_suggestions?: boolean;
+  /** Extra environment for the claude process, merged over the sidecar's (which is Neovim's). */
+  env?: Record<string, string>;
 }
 
 export interface PromptRequest {
