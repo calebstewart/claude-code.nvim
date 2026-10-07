@@ -261,7 +261,9 @@ function M.list(dir, callback, opts)
   end
   local started = generation
   local function store(result)
-    if result.ok and generation == started then
+    -- A fresh `wt list` can overtake an older one still running: the newer start wins.
+    local newer = list_cache[dir]
+    if result.ok and generation == started and not (newer and newer.at > now) then
       list_cache[dir] = { at = now, result = result }
     end
     return result
