@@ -18,7 +18,12 @@ local M = {}
 ---@field shell { respond: boolean, max_output: integer } `!command` prompts: whether Claude responds once the command exits, and how much output (characters) it's given.
 ---@field prompt_suggestions boolean After each turn, suggest a next prompt (shown in the empty prompt; <Tab> takes it).
 ---@field messaging claude_code.MessagingConfig Messages between Claude sessions.
+---@field worktree claude_code.WorktreeConfig Integration with the worktree skill's `wt` CLI.
 ---@field env? table<string, string>|fun(session: claude_code.EnvContext): table<string, string>? Extra environment for each session's claude process, merged over Neovim's. A function is called every time a session's process starts.
+
+---@class claude_code.WorktreeConfig
+---@field enabled? boolean nil: on when `wt` is found; false: off; true: on (and `:checkhealth` warns if `wt` is missing).
+---@field wt? string Path to `wt`, or a command on $PATH; nil looks only in the skill's install location.
 
 ---@class claude_code.EnvContext
 ---@field session_id string
@@ -78,6 +83,7 @@ M.defaults = {
   shell = { respond = true, max_output = 30000 },
   prompt_suggestions = true,
   messaging = { inbound = nil },
+  worktree = { enabled = nil, wt = nil },
   env = nil,
 }
 

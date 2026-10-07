@@ -65,6 +65,43 @@ function M.check()
   else
     vim.health.warn("Session store not found: " .. store, "It appears once Claude Code has run here")
   end
+
+  M.check_worktree()
+end
+
+--- The optional `wt` integration: off, missing, or working.
+function M.check_worktree()
+  vim.health.start("claude-code.nvim: worktrees (wt)")
+  local worktree = require("claude-code.worktree")
+  local enabled = config.options.worktree.enabled
+  if enabled == false then
+    vim.health.info("Off (`worktree.enabled = false`)")
+    return
+  end
+  local path = worktree.path()
+  if not path then
+    local where = config.options.worktree.wt or "the worktree skill's install location"
+    if enabled then
+      vim.health.warn(
+        ("`worktree.enabled` is true, but `wt` was not found (looked for %s)"):format(where),
+        "Install the worktree skill, or set `worktree.wt` to its path"
+      )
+    else
+      vim.health.info(("Off: `wt` not found (looked for %s)"):format(where))
+    end
+    return
+  end
+  local ok, done = pcall(function()
+    return vim.system({ path, "--version" }, { text = true }):wait(5000)
+  end)
+  if not ok or done.code ~= 0 then
+    vim.health.error(
+      ("`%s --version` failed: %s"):format(path, ok and vim.trim(done.stderr or "") or tostring(done)),
+      "`wt` needs python3"
+    )
+    return
+  end
+  vim.health.ok(("%s (%s)"):format(vim.trim(done.stdout or ""), path))
 end
 
 return M
