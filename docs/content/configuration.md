@@ -245,9 +245,9 @@ With it on, `:checkhealth claude-code` has a section for `wt`, and:
 - **The chat's bar shows the session's tree.** When the session's directory is inside a `wt` tree, the bar
   above the transcript shows the tree's name and slot after the session's name, e.g. `fix-login · slot 2`,
   in the [`Worktree`](@/appearance.md#chrome) highlight. The plugin asks `wt` in the background when the
-  session starts or moves, when a turn or `!command` ends, when Neovim regains focus, and after it runs a
-  `wt` command that changes trees itself. Drawing the bar only reads the last answer, so it never waits on
-  `wt`.
+  session starts or moves, when the chat is shown, when a turn or `!command` ends, when Neovim regains focus,
+  and after it runs a `wt` command that changes trees itself. Drawing the bar only reads the last answer, so it
+  never waits on `wt`.
 - **Your statusline can show it too.** `require("claude-code").worktree()` returns the current session's tree
   as `{ name, slot, branch, path }` (`branch` is `nil` when detached), or `nil` when the session isn't in a
   tree. It returns the stored answer and never runs `wt`, so it is cheap enough to call on every redraw.

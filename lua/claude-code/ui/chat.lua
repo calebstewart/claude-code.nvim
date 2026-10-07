@@ -160,7 +160,7 @@ end
 ---@field private agent_lines table<integer, string> Dock line -> tool_use id of the running subagent shown there.
 ---@field private agent_range? { first: integer, last: integer } Dock lines holding subagents, if any.
 ---@field private tree? claude_code.ChatTree Last result of refresh_tree(), shown in the winbar.
----@field private tree_lookup? { cwd: string, again: boolean } The lookup in flight, if any.
+---@field private tree_lookup? { cwd: string, again: boolean, fresh: boolean } The lookup in flight, if any, and whether another (fresh) one is due after it.
 local Chat = {}
 Chat.__index = Chat
 
@@ -207,8 +207,11 @@ function Chat.new(opts)
       end
     end,
   })
-  -- A tree may have been created or removed: by the plugin, or from a terminal
-  -- outside Neovim. (What Claude does is caught when its turn ends.)
+  -- A tree may have been created or removed: by the plugin (which has cleared
+  -- `wt list`'s cache), or from a terminal outside Neovim (so skip the cache).
+  -- What Claude does is caught when its turn ends. Hidden chats too, since
+  -- worktree() reports the current session's tree while the sidebar is closed;
+  -- chats in the same directory share one `wt list`.
   api.nvim_create_autocmd("User", {
     group = group,
     pattern = worktree.CHANGED,
@@ -219,9 +222,7 @@ function Chat.new(opts)
   api.nvim_create_autocmd("FocusGained", {
     group = group,
     callback = function()
-      if self:visible() then
-        self:refresh_tree()
-      end
+      self:refresh_tree({ fresh = true })
     end,
   })
   api.nvim_create_autocmd({ "WinResized", "VimResized" }, {
@@ -612,7 +613,8 @@ end
 --- Look up, in the background, which `wt` tree the session's working directory
 --- is in, and redraw the winbar if that changed. Rendering only reads the stored
 --- result, so it never waits on `wt`. Without the integration, runs nothing.
-function Chat:refresh_tree()
+---@param opts? claude_code.WtListOpts `fresh`: something outside the plugin may have changed the trees, so skip `wt list`'s cache.
+function Chat:refresh_tree(opts)
   if self.wiped then
     return
   end
@@ -620,13 +622,15 @@ function Chat:refresh_tree()
     self:set_tree(nil) -- turned off since the last lookup
     return
   end
+  local fresh = opts and opts.fresh or false
   if self.tree_lookup then
     -- One lookup at a time, plus one more if this one may be out of date.
     self.tree_lookup.again = true
+    self.tree_lookup.fresh = self.tree_lookup.fresh or fresh
     return
   end
   local cwd = self.opts.cwd or vim.fn.getcwd()
-  self.tree_lookup = { cwd = cwd, again = false }
+  self.tree_lookup = { cwd = cwd, again = false, fresh = false }
   worktree.tree_for(cwd, function(entry)
     local lookup = self.tree_lookup
     self.tree_lookup = nil
@@ -635,11 +639,11 @@ function Chat:refresh_tree()
     end
     -- The session moved, or something changed, while it ran: look again.
     if lookup and (lookup.again or lookup.cwd ~= (self.opts.cwd or vim.fn.getcwd())) then
-      self:refresh_tree()
+      self:refresh_tree({ fresh = lookup.fresh })
       return
     end
     self:set_tree(entry and { name = entry.name, slot = entry.slot, branch = entry.branch, path = entry.path })
-  end)
+  end, { fresh = fresh })
 end
 
 ---@private
@@ -718,6 +722,8 @@ function Chat:show(show_opts)
     local wo = vim.wo[wins.transcript][0]
     wo.conceallevel, wo.concealcursor = 2, "nc"
     wo.winbar = self:winbar()
+    -- The tree may have changed while the chat was hidden.
+    self:refresh_tree()
   end
   if not wins.dock then
     wins.dock = api.nvim_open_win(self.dock, false, {
@@ -1329,8 +1335,10 @@ function Chat:set_status(status)
     self:render_welcome()
   end
   -- (Re)started, or a turn or `!command` just ended, which may have created or
-  -- removed a tree: look the session's tree up again.
-  if (status.stopped == false and was_stopped ~= false) or (was_busy and not activity) then
+  -- removed a tree without the plugin knowing: look the session's tree up again.
+  if was_busy and not activity then
+    self:refresh_tree({ fresh = true })
+  elseif status.stopped == false and was_stopped ~= false then
     self:refresh_tree()
   end
 end
