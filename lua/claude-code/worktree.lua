@@ -48,6 +48,11 @@ local MUTATING = { new = true, adopt = true, claim = true, release = true, rm = 
 --- empty value as unset.
 local ANONYMOUS = { WT_SESSION_ID = "", WT_PID = "", CLAUDE_CODE_SESSION_ID = "", CLAUDE_PID = "" }
 
+--- `User` autocmd fired (on the next tick) after the trees or their holders may
+--- have changed: a mutating command run through this module finished, or
+--- M.invalidate() was called. Views showing a tree look it up again.
+M.CHANGED = "ClaudeCodeWorktreesChanged"
+
 --- How long a `wt list` result is reused for the same directory.
 local LIST_TTL_MS = 5000
 
@@ -58,6 +63,11 @@ local list_cache = {}
 --- changed since it started, so one that read the registry before a change
 --- can't put the old state back after the change cleared the cache.
 local generation = 0
+
+local function forget()
+  list_cache = {}
+  generation = generation + 1
+end
 
 ---@return string
 local function default_path()
@@ -162,7 +172,7 @@ function M.run(args, opts, callback)
   opts = opts or {}
   local cmd = command(args, opts)
   if MUTATING[args[1]] then
-    M.invalidate()
+    forget()
   end
   if not cmd then
     local result = failure("wt not found; install the worktree skill, or set `worktree.wt`")
@@ -210,10 +220,12 @@ function M.run(args, opts, callback)
 end
 
 --- Forget cached `wt list` results, e.g. after a tree was created or removed
---- outside this module.
+--- outside this module, and tell views showing a tree (M.CHANGED).
 function M.invalidate()
-  list_cache = {}
-  generation = generation + 1
+  forget()
+  vim.schedule(function()
+    vim.api.nvim_exec_autocmds("User", { pattern = M.CHANGED, modeline = false })
+  end)
 end
 
 --- `wt list` for the project containing `dir`, reused for a few seconds.

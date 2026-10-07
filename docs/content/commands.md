@@ -50,6 +50,7 @@ need arguments or conditions.
 | `image(path)` | Attach an image file to the prompt, opening the chat if needed |
 | `deliver()` | Deliver the current session's held messages from other sessions |
 | `next()` / `prev()` | Switch to the next or previous session open in this Neovim |
+| `worktree()` | The current session's [`wt` tree](@/configuration.md#worktrees) (`{ name, slot, branch, path }`) or `nil`, for statuslines. Never runs `wt` |
 
 ```lua
 vim.keymap.set("n", "<leader>cc", require("claude-code").toggle, { desc = "Claude: toggle chat" })

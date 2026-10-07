@@ -25,6 +25,13 @@ function M.current()
   return current
 end
 
+--- The current session, without M.current()'s tidying up: for callers that
+--- mustn't change anything, such as statuslines.
+---@return claude_code.Session?
+function M.peek()
+  return current
+end
+
 ---@return claude_code.Session[]
 function M.live()
   return live

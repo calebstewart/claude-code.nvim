@@ -20,6 +20,7 @@ local config = require("claude-code.config")
 ---@field image string
 ---@field background string
 ---@field message string A message from another Claude session.
+---@field worktree string The `wt` tree a session runs in.
 ---@field tools table<string, string> Tool name -> icon; `default` for anything else.
 
 ---@type table<string, claude_code.Icons>
@@ -41,6 +42,7 @@ local sets = {
     image = "\u{f03e}", -- fa-picture_o
     background = "\u{f1da}", -- fa-history
     message = "\u{f0e0}", -- fa-envelope
+    worktree = "\u{f418}", -- oct-git_branch
     pill = { "\u{e0b6}", "\u{e0b4}" }, -- powerline rounded caps
     spinner = { "⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏" },
     tools = {
@@ -81,6 +83,7 @@ local sets = {
     image = "▣",
     background = "◷",
     message = "✉",
+    worktree = "⎇",
     pill = { "", "" },
     spinner = { "⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏" },
     tools = {
