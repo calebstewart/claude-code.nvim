@@ -89,6 +89,9 @@ minutes has its process stopped. Switching back to it, or sending to it, resumes
 session that has been [messaging other sessions](#messages-between-sessions), or is holding messages for you,
 keeps running: a stopped session can't be messaged.
 
+A suspended session keeps any [`wt` worktree](@/configuration.md#worktrees) it holds: `wt` counts it as live
+until you close the session or quit Neovim.
+
 Resuming a session from disk redraws its conversation — the last 200 messages.
 
 > [!WARNING]

@@ -321,6 +321,45 @@ local function find_tree(result, dir)
   return nil
 end
 
+--- Whether `dir` is in a linked git worktree: the nearest `.git` above it is a
+--- file, not a directory. Every `wt` tree is one (the root checkout can't be a
+--- tree), so anywhere else can't be in a tree, and this answers that without
+--- starting `wt` (a Python process, around 100 ms).
+---@param dir string
+---@return boolean
+local function in_linked_worktree(dir)
+  local git = vim.fs.find(".git", { path = dir, upward = true, limit = 1 })[1]
+  local stat = git and vim.uv.fs_stat(git)
+  return stat ~= nil and stat.type == "file"
+end
+
+--- The tree containing `dir`, and why it couldn't be found if `wt` failed.
+---@param dir string
+---@param callback? fun(tree: table?, err: string?) Without one, runs synchronously.
+---@param opts? claude_code.WtListOpts
+---@return table? tree
+---@return string? err
+local function lookup(dir, callback, opts)
+  if not M.enabled() or vim.fn.isdirectory(dir) == 0 or not in_linked_worktree(dir) then
+    if callback then
+      vim.schedule(function()
+        callback(nil)
+      end)
+    end
+    return nil
+  end
+  local function found(result)
+    return find_tree(result, dir), not result.ok and result.error or nil
+  end
+  if callback then
+    M.list(dir, function(result)
+      callback(found(result))
+    end, opts)
+    return nil
+  end
+  return found(M.list(dir, nil, opts) --[[@as claude_code.WtResult]])
+end
+
 --- The `wt` tree containing `dir`, or nil (not in a tree, not a git repository,
 --- or `wt` unavailable). The tree is `wt list`'s entry: name, path, branch,
 --- slot, state, holder, env, ...
@@ -329,21 +368,68 @@ end
 ---@param opts? claude_code.WtListOpts
 ---@return table?
 function M.tree_for(dir, callback, opts)
-  if not M.enabled() or vim.fn.isdirectory(dir) == 0 then
-    if callback then
-      vim.schedule(function()
-        callback(nil)
-      end)
-    end
-    return nil
-  end
   if callback then
-    M.list(dir, function(result)
-      callback(find_tree(result, dir))
+    lookup(dir, function(tree)
+      callback(tree)
     end, opts)
     return nil
   end
-  return find_tree(M.list(dir, nil, opts) --[[@as claude_code.WtResult]], dir)
+  return (lookup(dir, nil, opts))
+end
+
+--- Environment for a session's claude process running in `dir`: the tree's
+--- environment when `dir` is in one (what `wt env <name>` prints: its setup
+--- output plus `wt`'s own WT_* variables), and the session's identity.
+---
+--- WT_PID is Neovim's pid, not the claude process's: `wt` reads it before
+--- CLAUDE_PID, so a claim made from the session stays live while Neovim has the
+--- session open, including while its process is stopped for being idle.
+--- WT_SESSION_ID pins the id too, over any WT_SESSION_ID Neovim inherited.
+---
+--- Synchronous, but only runs `wt` when `dir` is in a linked git worktree.
+---@param session_id string
+---@param dir string
+---@return table<string, string> env
+---@return string? err Why the tree's environment is missing, when `wt` failed.
+function M.session_env(session_id, dir)
+  local env = {}
+  local tree, err = lookup(dir)
+  if tree and type(tree.env) == "table" then
+    for name, value in pairs(tree.env) do
+      if type(name) == "string" and (type(value) == "string" or type(value) == "number") then
+        env[name] = tostring(value)
+      end
+    end
+  end
+  env.WT_PID = tostring(vim.fn.getpid())
+  env.WT_SESSION_ID = session_id
+  return env, err
+end
+
+--- Release whichever tree session `id` holds, in any project, acting as that
+--- session (`--session`, with Neovim's pid). Found from `wt list --all-projects`
+--- by its holder, not from the session's directory: a session may hold a tree
+--- other than the one it runs in. `wt` gives a session at most one tree.
+---@param id string
+---@param callback fun(name: string?, result: claude_code.WtResult?) `name` is nil when the session held nothing; `result` is the failed `wt` call, if any.
+function M.release_session(id, callback)
+  M.run({ "list", "--all-projects" }, {}, function(listed)
+    if not listed.ok then
+      return callback(nil, listed)
+    end
+    for _, project in ipairs(listed.data or {}) do
+      for _, tree in ipairs(project.trees or {}) do
+        if type(tree.holder) == "table" and tree.holder.session == id then
+          local opts = { cwd = tree.root or project.root, session = { id = id, pid = vim.fn.getpid() } }
+          M.run({ "release", tree.name }, opts, function(result)
+            callback(tree.name, not result.ok and result or nil)
+          end)
+          return
+        end
+      end
+    end
+    callback(nil)
+  end)
 end
 
 return M

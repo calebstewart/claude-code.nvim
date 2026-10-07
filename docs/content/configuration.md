@@ -101,7 +101,8 @@ opts = {
 }
 ```
 
-Values must be strings or numbers. Variables can be added or overridden, but not removed.
+Values must be strings or numbers. Variables can be added or overridden, but not removed. They also override
+what the [worktree integration](#worktrees) sets, such as a tree's environment.
 
 ## Conversation
 
@@ -242,6 +243,19 @@ its output; it never names, sets up or removes trees on its own. Without `wt` in
 
 With it on, `:checkhealth claude-code` has a section for `wt`, and:
 
+- **A session in a tree starts with the tree's environment.** When a session's directory is inside a `wt` tree,
+  its `claude` process gets what `wt env <name>` prints: the variables the tree's setup hook produced (test
+  database, ports, …) and `wt`'s own `WT_*` variables. So commands Claude runs see them without
+  `wt exec`. This is worked out every time the process starts, including when a suspended session resumes.
+- **Claims stay live while Neovim has the session open.** Every session's process gets `WT_PID` set to
+  Neovim's pid and `WT_SESSION_ID` to the session's id. `wt` reads `WT_PID` before `CLAUDE_PID`, so a tree
+  the session claims (with `wt new` or `wt claim`) counts as held by a live session as long as the session
+  is open here, even while its process is [stopped for being idle](@/sessions.md#suspending-and-resuming).
+  Without this, `wt` would see the stopped process and treat the tree as abandoned.
+- **Closing a session releases its tree.** When you close a session (`:Claude stop`, `/exit`, deleting it),
+  the plugin releases the tree it holds, in the background, wherever that tree is. Suspending doesn't. Nor
+  does quitting Neovim: `wt` then sees the claim's process gone and treats the tree as ended, and resuming
+  the session later lets it claim the tree again without asking.
 - **The chat's bar shows the session's tree.** When the session's directory is inside a `wt` tree, the bar
   above the transcript shows the tree's name and slot after the session's name, e.g. `fix-login · slot 2`,
   in the [`Worktree`](@/appearance.md#chrome) highlight. The plugin asks `wt` in the background when the
@@ -264,6 +278,14 @@ sections = {
   },
 },
 ```
+
+If `wt` fails, the session starts anyway, without the tree's environment, and you get a warning.
+
+The [`env`](#env) option is applied last, so it overrides any of these variables.
+
+Finding the tree costs a `wt list`, around 100 ms, which the plugin waits for when the process starts. It
+only runs it for a directory inside a linked git worktree (where `.git` is a file), since a tree is always
+one, and reuses the result for a few seconds.
 
 ### worktree.enabled
 

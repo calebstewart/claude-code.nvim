@@ -11,6 +11,7 @@ local control = require("claude-code.control")
 local modes = require("claude-code.modes")
 local tools = require("claude-code.ui.tools")
 local transport = require("claude-code.transport")
+local worktree = require("claude-code.worktree")
 
 ---@class claude_code.Session
 ---@field id string Claude session id (chosen up front for new sessions).
@@ -326,25 +327,35 @@ function Session:start()
   })
 end
 
---- Extra environment for the process, from the `env` option. Worked out on
---- every start, so a function sees the session as it is now (its cwd may have
---- moved) and a restart after an idle suspend picks up any change.
+--- Extra environment for the process: with the worktree integration on, the
+--- session's `wt` identity and, in a tree, the tree's environment; then the
+--- `env` option, which wins over both. Worked out on every start, so a function
+--- sees the session as it is now (its cwd may have moved) and a restart after an
+--- idle suspend picks up any change.
 ---@private
 ---@return table<string, string>?
 function Session:environment()
+  local out = {}
+  if worktree.enabled() then
+    local err
+    out, err = worktree.session_env(self.id, self.cwd)
+    if err then
+      vim.notify("claude-code: starting without the worktree's environment: " .. err, vim.log.levels.WARN)
+    end
+  end
   local env = config.options.env
   if type(env) == "function" then
     local ok, result = pcall(env, { session_id = self.id, cwd = self.cwd, title = self.title })
     if not ok then
       vim.notify("claude-code: `env` failed: " .. tostring(result), vim.log.levels.ERROR)
-      return nil
+      env = nil
+    else
+      env = result
     end
-    env = result
   end
   if type(env) ~= "table" then
-    return nil
+    env = {}
   end
-  local out = {}
   for name, value in pairs(env) do
     if type(name) == "string" and (type(value) == "string" or type(value) == "number") then
       out[name] = tostring(value)
