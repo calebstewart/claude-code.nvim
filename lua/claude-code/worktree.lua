@@ -54,6 +54,11 @@ local LIST_TTL_MS = 5000
 ---@type table<string, { at: integer, result: claude_code.WtResult }>
 local list_cache = {}
 
+--- Bumped by M.invalidate(). A `wt list` caches its result only if this hasn't
+--- changed since it started, so one that read the registry before a change
+--- can't put the old state back after the change cleared the cache.
+local generation = 0
+
 ---@return string
 local function default_path()
   local base = vim.env.CLAUDE_CONFIG_DIR or vim.fs.joinpath(vim.env.HOME or "~", ".claude")
@@ -208,6 +213,7 @@ end
 --- outside this module.
 function M.invalidate()
   list_cache = {}
+  generation = generation + 1
 end
 
 --- `wt list` for the project containing `dir`, reused for a few seconds.
@@ -225,8 +231,9 @@ function M.list(dir, callback)
     end
     return hit.result
   end
+  local started = generation
   local function store(result)
-    if result.ok then
+    if result.ok and generation == started then
       list_cache[dir] = { at = vim.uv.now(), result = result }
     end
     return result
