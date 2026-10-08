@@ -492,17 +492,13 @@ end
 ---@field result? claude_code.WtResult What `wt rm --yes` returned, when it ran.
 ---@field package marked? boolean remove_confirmed marked it "removing", so clears that mark.
 
---- Why `tree` mustn't be removed right now, in the middle of a removal: a
---- session open here is in it (again), a Claude Code process elsewhere runs in
---- it, or Neovim uses it (editor_use). Not whether it's busy: it's busy
---- removing itself.
+--- Why `tree` mustn't be removed, sessions open here aside: a Claude Code
+--- process outside this Neovim runs in it, or Neovim uses it (editor_use).
+--- Closing the tree's sessions doesn't change either, so a removal checks this
+--- before closing them, as well as just before `wt rm --yes`.
 ---@param tree table
 ---@return string?
-local function stop_removing(tree)
-  local back = M.sessions_in(tree)[1]
-  if back then
-    return ("%s is open in it"):format(title(back))
-  end
+local function used_beyond_sessions(tree)
   local process = process_elsewhere(tree)
   if process then
     return elsewhere_text(process)
@@ -513,21 +509,38 @@ local function stop_removing(tree)
   end
 end
 
---- Remove trees the user has confirmed removing. Each is marked "removing"
---- first, so no session can start in it. Then the sessions open here that
---- work in each are closed, all at once, and waited for (close_all), and
---- `wt rm --yes` runs for each tree, one at a time, as `wt cleanup` does.
+--- Why `tree` mustn't be removed right now, just before its `wt rm --yes`: a
+--- session open here is in it (again), or used_beyond_sessions. Not whether
+--- it's busy: it's busy removing itself.
+---@param tree table
+---@return string?
+local function stop_removing(tree)
+  local back = M.sessions_in(tree)[1]
+  if back then
+    return ("%s is open in it"):format(title(back))
+  end
+  return used_beyond_sessions(tree)
+end
+
+--- Remove trees the user has confirmed removing. A tree that came into use
+--- beyond its sessions meanwhile (used_beyond_sessions: timers and callbacks
+--- run while a confirmation is open) is left alone, its sessions untouched.
+--- Each other tree is marked "removing", so no session can start in it. Then
+--- the sessions open here that work in each are closed, all at once, and
+--- waited for (close_all), and `wt rm --yes` runs for each tree, one at a
+--- time, as `wt cleanup` does.
 ---
 --- Each tree stands alone. One whose sessions don't let go in time, or that
 --- comes into use again just before its `wt rm --yes` (stop_removing: Neovim
 --- keeps working while earlier trees are torn down), isn't removed (`problem`
---- says why); the others still are. An item that comes with a `problem`
---- already (left out at the last moment) is neither marked nor touched, and
---- only marks set here are cleared, once each tree is done with.
+--- says why); the others still are. An item with a `problem` before marking
+--- (passed in, or found then) is neither marked nor touched, and only marks
+--- set here are cleared, once each tree is done with.
 ---@param batch claude_code.TreeRemoval[]
 ---@param callback fun(batch: claude_code.TreeRemoval[])
 local function remove_confirmed(batch, callback)
   for _, item in ipairs(batch) do
+    item.problem = item.problem or used_beyond_sessions(item.tree)
     if not item.problem then
       set_busy(item.tree, "removing")
       item.marked = true
@@ -629,8 +642,10 @@ function M.remove(tree)
     if vim.fn.confirm(table.concat(lines, "\n"), "&Remove\n&Cancel", 2, "Warning") ~= 1 then
       return set_busy(tree, nil)
     end
-    -- From "checking" to "removing": from here no session may open in it (see
-    -- M.removing_at, work.lua).
+    -- remove_confirmed marks it "removing" (from there no session may open in
+    -- it, see M.removing_at, work.lua) in this same tick, unless it's left
+    -- alone, so "checking" ends here.
+    set_busy(tree, nil)
     remove_confirmed({ { tree = tree, as = as } }, function(batch)
       local item = batch[1]
       if item.problem then

@@ -351,8 +351,9 @@ here that work in it, and its environment. `name` pre-fills the search.
   released, then runs `wt rm --yes`. If a process is still running after 10 seconds, the tree is not removed:
   you're told which session it was, and can try again. It also refuses to remove a tree a Claude Code process
   outside this Neovim is running in, or one Neovim itself is using: a working directory (global, tab or
-  window) inside it, or a buffer with unsaved changes whose file is in it. It checks all of this again just
-  before `wt rm --yes`.
+  window) inside it, or a buffer with unsaved changes whose file is in it. It checks this again once you've
+  confirmed, before closing any session, so they're left alone if the tree came into use meanwhile, and once
+  more just before `wt rm --yes`.
 - **While a tree is being removed, no session can start in it.** Opening it from the picker, `:Claude work`,
   and resuming or starting a session there (from the session picker too) are refused until the removal ends.
 - **Every `wt` call runs in the background.** A row shows what's under way on it (checking, opening,
