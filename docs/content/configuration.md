@@ -350,7 +350,9 @@ here that work in it, and its environment. `name` pre-fills the search.
   says. Their transcripts stay on disk. The plugin waits for their processes to exit and their claims to be
   released, then runs `wt rm --yes`. If a process is still running after 10 seconds, the tree is not removed:
   you're told which session it was, and can try again. It also refuses to remove a tree a Claude Code process
-  outside this Neovim is running in.
+  outside this Neovim is running in, or one Neovim itself is using: a working directory (global, tab or
+  window) inside it, or a buffer with unsaved changes whose file is in it. It checks all of this again just
+  before `wt rm --yes`.
 - **While a tree is being removed, no session can start in it.** Opening it from the picker, `:Claude work`,
   and resuming or starting a session there (from the session picker too) are refused until the removal ends.
 - **Every `wt` call runs in the background.** A row shows what's under way on it (checking, opening,
@@ -404,8 +406,10 @@ The preview shows `wt`'s plan for the tree: its changes, teardown, and what happ
 - **While the trees are being removed, no session can start in any of them**, as when removing a tree from the
   picker. The removal also follows the picker's: sessions open here in a tree are closed first, and if one
   doesn't stop within 10 seconds, that tree isn't removed. Normally there are none, since such trees are
-  kept. Just before each removal, a tree that a session here or a Claude Code process elsewhere has entered
-  is skipped.
+  kept. Trees are removed one after another, and Neovim stays usable meanwhile, so just before each tree's
+  removal the plugin checks it again. It's skipped if a session open here is in it, a Claude Code process
+  outside this Neovim runs in it, a working directory (global, tab or window) is inside it, or a buffer with
+  unsaved changes has a file in it.
 - **One failure doesn't stop the rest.** Each tree is removed on its own. When it's done, a notification
   lists the trees removed, and the ones that weren't, with why: `wt`'s reason and hint (for example a failed
   teardown, which leaves the tree marked broken, as `wt` does), or the check that stopped it. The list then

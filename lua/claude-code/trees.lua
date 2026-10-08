@@ -431,6 +431,38 @@ local function process_elsewhere(tree)
   end
 end
 
+--- Why Neovim itself is using `tree`, if it is: a working directory in it (the
+--- global one, or any tab's or window's), or a loaded buffer with unsaved
+--- changes whose file is in it.
+---@param tree table
+---@return string[]
+local function editor_use(tree)
+  local reasons = {}
+  local cwds = { vim.fn.getcwd(-1, -1) }
+  for _, tab in ipairs(vim.api.nvim_list_tabpages()) do
+    local tabnr = vim.api.nvim_tabpage_get_number(tab)
+    table.insert(cwds, vim.fn.getcwd(-1, tabnr))
+    for _, win in ipairs(vim.api.nvim_tabpage_list_wins(tab)) do
+      table.insert(cwds, vim.fn.getcwd(vim.api.nvim_win_get_number(win), tabnr))
+    end
+  end
+  for _, dir in ipairs(cwds) do
+    if M.within(dir, tree.path) then
+      table.insert(reasons, "Neovim's working directory is in it")
+      break
+    end
+  end
+  for _, buf in ipairs(vim.api.nvim_list_bufs()) do
+    if vim.api.nvim_buf_is_loaded(buf) and vim.bo[buf].modified then
+      local name = vim.api.nvim_buf_get_name(buf)
+      if name ~= "" and M.within(name, tree.path) then
+        table.insert(reasons, ("%s has unsaved changes"):format(vim.fn.fnamemodify(name, ":~:.")))
+      end
+    end
+  end
+  return reasons
+end
+
 ---@param process { pid: integer }
 ---@return string
 local function elsewhere_text(process)
@@ -458,23 +490,53 @@ end
 ---@field as? claude_code.WtSession Who to run `wt rm --yes` as.
 ---@field problem? string Why `wt rm --yes` didn't run: its sessions didn't let go, ...
 ---@field result? claude_code.WtResult What `wt rm --yes` returned, when it ran.
+---@field package marked? boolean remove_confirmed marked it "removing", so clears that mark.
 
---- Remove trees the user has confirmed removing, already marked "removing" (so
---- no session can start in them): close the sessions open here that work in
---- each, all at once, and wait for them to let go (close_all). Then run
---- `wt rm --yes` for each tree, one at a time, as `wt cleanup` does.
+--- Why `tree` mustn't be removed right now, in the middle of a removal: a
+--- session open here is in it (again), a Claude Code process elsewhere runs in
+--- it, or Neovim uses it (editor_use). Not whether it's busy: it's busy
+--- removing itself.
+---@param tree table
+---@return string?
+local function stop_removing(tree)
+  local back = M.sessions_in(tree)[1]
+  if back then
+    return ("%s is open in it"):format(title(back))
+  end
+  local process = process_elsewhere(tree)
+  if process then
+    return elsewhere_text(process)
+  end
+  local using = editor_use(tree)
+  if #using > 0 then
+    return table.concat(using, "; ")
+  end
+end
+
+--- Remove trees the user has confirmed removing. Each is marked "removing"
+--- first, so no session can start in it. Then the sessions open here that
+--- work in each are closed, all at once, and waited for (close_all), and
+--- `wt rm --yes` runs for each tree, one at a time, as `wt cleanup` does.
 ---
---- Each tree stands alone. One whose sessions don't let go in time, or that a
---- session here or a Claude Code process elsewhere is in again just before its
---- `wt rm --yes`, isn't removed (`problem` says why); the others still are.
---- Each tree's "removing" mark is cleared once it's done with. An item that
---- comes with a `problem` already (left out at the last moment) isn't touched.
+--- Each tree stands alone. One whose sessions don't let go in time, or that
+--- comes into use again just before its `wt rm --yes` (stop_removing: Neovim
+--- keeps working while earlier trees are torn down), isn't removed (`problem`
+--- says why); the others still are. An item that comes with a `problem`
+--- already (left out at the last moment) is neither marked nor touched, and
+--- only marks set here are cleared, once each tree is done with.
 ---@param batch claude_code.TreeRemoval[]
 ---@param callback fun(batch: claude_code.TreeRemoval[])
 local function remove_confirmed(batch, callback)
-  local function done_with(tree)
-    if M.busy(tree) == "removing" then
-      set_busy(tree, nil)
+  for _, item in ipairs(batch) do
+    if not item.problem then
+      set_busy(item.tree, "removing")
+      item.marked = true
+    end
+  end
+  local function done_with(item)
+    if item.marked then
+      item.marked = nil
+      set_busy(item.tree, nil)
     end
   end
   local function remove_from(i)
@@ -482,22 +544,14 @@ local function remove_confirmed(batch, callback)
     if not item then
       return callback(batch)
     end
-    if not item.problem then
-      -- A session reopened in it anyway (e.g. by a plugin bypassing the
-      -- checks) would lose its directory.
-      local back = M.sessions_in(item.tree)[1]
-      local process = process_elsewhere(item.tree)
-      item.problem = back and ("%s is open in it again"):format(title(back))
-        or process and elsewhere_text(process)
-        or nil
-    end
+    item.problem = item.problem or stop_removing(item.tree)
     if item.problem then
-      done_with(item.tree)
+      done_with(item)
       return remove_from(i + 1)
     end
     worktree.run({ "rm", item.tree.name, "--yes" }, { cwd = item.tree.root, session = item.as }, function(result)
       item.result = result
-      done_with(item.tree)
+      done_with(item)
       remove_from(i + 1)
     end)
   end
@@ -531,7 +585,8 @@ end
 
 --- Remove `tree`: show `wt rm`'s dry-run plan and ask, then close the sessions
 --- open here that work in it and run `wt rm --yes`. A blocked plan only says
---- why. Refuses while a Claude Code process outside this Neovim runs in it.
+--- why. Refuses while a Claude Code process outside this Neovim runs in it, or
+--- Neovim uses it (editor_use); checks both again just before `wt rm --yes`.
 ---@param tree table
 function M.remove(tree)
   if not idle(tree) then
@@ -546,6 +601,11 @@ function M.remove(tree)
       ),
       vim.log.levels.WARN
     )
+    return
+  end
+  local using = editor_use(tree)
+  if #using > 0 then
+    notify(("not removing %s: %s"):format(tree.name, table.concat(using, "; ")), vim.log.levels.WARN)
     return
   end
   local as = identity(tree)
@@ -569,8 +629,8 @@ function M.remove(tree)
     if vim.fn.confirm(table.concat(lines, "\n"), "&Remove\n&Cancel", 2, "Warning") ~= 1 then
       return set_busy(tree, nil)
     end
-    -- From here no session may open in it (see M.removing_at, work.lua).
-    set_busy(tree, "removing")
+    -- From "checking" to "removing": from here no session may open in it (see
+    -- M.removing_at, work.lua).
     remove_confirmed({ { tree = tree, as = as } }, function(batch)
       local item = batch[1]
       if item.problem then
@@ -617,25 +677,7 @@ function M.in_use(tree)
   if process then
     table.insert(reasons, elsewhere_text(process))
   end
-  local cwds = { vim.fn.getcwd(-1, -1) }
-  for _, tab in ipairs(vim.api.nvim_list_tabpages()) do
-    local tabnr = vim.api.nvim_tabpage_get_number(tab)
-    for _, win in ipairs(vim.api.nvim_tabpage_list_wins(tab)) do
-      table.insert(cwds, vim.fn.getcwd(vim.api.nvim_win_get_number(win), tabnr))
-    end
-  end
-  for _, dir in ipairs(cwds) do
-    if M.within(dir, tree.path) then
-      table.insert(reasons, "Neovim's working directory is in it")
-      break
-    end
-  end
-  for _, buf in ipairs(vim.api.nvim_list_bufs()) do
-    local name = vim.api.nvim_buf_get_name(buf)
-    if vim.bo[buf].modified and name ~= "" and M.within(name, tree.path) then
-      table.insert(reasons, ("%s has unsaved changes"):format(vim.fn.fnamemodify(name, ":~:.")))
-    end
-  end
+  vim.list_extend(reasons, editor_use(tree))
   local doing = M.busy(tree)
   if doing then
     table.insert(reasons, ("busy (%s)"):format(doing))
@@ -807,10 +849,9 @@ function M.remove_stale(stale, callback)
     local using = M.in_use(entry.tree)
     if #using > 0 then
       item.problem = "now in use here: " .. table.concat(using, "; ")
-    else
-      -- From here no session may start in it (see M.removing_at).
-      set_busy(entry.tree, "removing")
     end
+    -- The others are marked "removing" by remove_confirmed: from there no
+    -- session may start in them (see M.removing_at).
     table.insert(items, item)
   end
   cleaning = cleaning + 1
