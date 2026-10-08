@@ -27,6 +27,9 @@ function M.here()
     return
   end
   if not s then
+    if sessions.being_removed(vim.fn.getcwd()) then
+      return
+    end
     s = require("claude-code.session").new()
     if not s then
       return
@@ -118,6 +121,19 @@ function M.work(text, opts)
       end
     end,
   })
+end
+
+--- Pick a `wt` tree of the current project to open or resume a session in,
+--- claim, release or remove. `query` pre-fills the search. Needs the worktree
+--- integration; `wt` runs in the background.
+---@param query? string
+function M.trees(query)
+  local problem = require("claude-code.work").unavailable("trees")
+  if problem then
+    vim.notify("claude-code: " .. problem, vim.log.levels.ERROR)
+    return
+  end
+  require("claude-code.ui.trees").open({ scope = "project", query = vim.trim(query or "") })
 end
 
 --- Rename the current session. With no name, asks for one.

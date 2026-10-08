@@ -34,6 +34,9 @@ local subcommands = {
   work = function(args)
     require("claude-code").work(args)
   end,
+  trees = function(args)
+    require("claude-code").trees(args)
+  end,
   rename = function(args)
     require("claude-code").rename(args)
   end,
@@ -82,6 +85,11 @@ end, {
       return vim.tbl_filter(function(name)
         return vim.startswith(name, arg_lead)
       end, require("claude-code.work").candidates(vim.fn.getcwd()))
+    end
+    if line:match("^%S+%s+trees%s+%S*$") then
+      return vim.tbl_filter(function(name)
+        return vim.startswith(name, arg_lead)
+      end, require("claude-code.work").candidates(vim.fn.getcwd(), true))
     end
     if line:match("^%S+%s+mode%s+%S*$") then
       return vim.tbl_filter(function(mode)

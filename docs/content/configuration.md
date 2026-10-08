@@ -311,6 +311,51 @@ is anything `wt new` takes: a story id, a branch, or a description. With no text
   setup failed stays registered, as `wt` leaves it, but isn't left held: the plugin releases it.
 - Without `wt`, or with `worktree.enabled = false`, the command just says so and does nothing else.
 
+### Picking a tree
+
+`:Claude trees [name]` (or `require("claude-code").trees(name)`) opens a picker over `wt list`, laid out like
+the [session picker](@/sessions.md#the-picker). Each row shows the tree's name, branch, slot and holder, with
+a marker: `●` held by a session in this Neovim, `◆` held by a session running elsewhere, `○` last held by a
+session that has ended, `✗` broken or missing. The preview shows its path, state, holder, the sessions open
+here that work in it, and its environment. `name` pre-fills the search.
+
+| Key | |
+|---|---|
+| <kbd>Enter</kbd> | Open a session in the tree (see below) |
+| <kbd>C-a</kbd> | Work on something new, as `:Claude work` |
+| <kbd>C-t</kbd> | Claim the tree for the current session |
+| <kbd>C-r</kbd> | Release the tree |
+| <kbd>C-x</kbd> | Remove the tree (see below) |
+| <kbd>C-g</kbd> | Toggle between this project's trees and every project's |
+| <kbd>C-n</kbd>/<kbd>C-p</kbd>, <kbd>C-j</kbd>/<kbd>C-k</kbd>, arrows | Move |
+| <kbd>Esc</kbd> / <kbd>C-c</kbd> | Close |
+
+- **Opening.** If a session open in this Neovim runs in the tree or holds it, the picker switches to it.
+  Otherwise, if sessions ran in the tree before, it asks whether to start a new one or resume one of them,
+  with the session that last held the tree first. The tree is then claimed for that session as `:Claude work`
+  does, with the same take-over question when its last holder has ended. A tree held by a session still
+  running elsewhere is only reported.
+- **Claiming** gives the tree to the session the chat shows, which keeps working where it is. `wt` gives a
+  session one tree, so it lets go of any other.
+- **Releasing** acts as the holder when that's a session open here. `wt` refuses to release a tree held by a
+  session running elsewhere, and the picker tells you which.
+- **Removing** first shows `wt rm`'s dry run: the tree's changes and unpushed commits, the teardown, what
+  happens to the branch, and `wt`'s notes. When `wt` would refuse (uncommitted changes, unpushed commits, held
+  by a session running elsewhere, …), you get the plan with the reasons, and nothing to confirm. Otherwise
+  you're asked to confirm, and the question lists the sessions open here that work in the tree. Removing
+  closes them first, since their directory is about to go: a turn in progress is interrupted, a pending
+  permission request or question is dropped, and a running `!command` is killed, all of which the question
+  says. Their transcripts stay on disk. The plugin waits for their processes to exit and their claims to be
+  released, then runs `wt rm --yes`. If a process is still running after 10 seconds, the tree is not removed:
+  you're told which session it was, and can try again. It also refuses to remove a tree a Claude Code process
+  outside this Neovim is running in.
+- **While a tree is being removed, no session can start in it.** Opening it from the picker, `:Claude work`,
+  and resuming or starting a session there (from the session picker too) are refused until the removal ends.
+- **Every `wt` call runs in the background.** A row shows what's under way on it (checking, opening,
+  removing, …), and other actions on that tree are refused meanwhile. The list reloads after each action, on
+  `User ClaudeCodeWorktreesChanged`, and when Neovim regains focus.
+- Without `wt`, or with `worktree.enabled = false`, the command just says so.
+
 ### worktree.enabled
 
 `boolean | nil`, default `nil`. `nil` turns the integration on when `wt` is found, `false` turns it off, and

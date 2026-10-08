@@ -108,12 +108,29 @@ function M.adopt(session)
   add(session)
 end
 
+--- Whether `dir` is in a `wt` tree the tree picker is removing (and says so):
+--- a session started there would have its directory deleted under it.
+---@param dir? string
+---@return boolean
+local function being_removed(dir)
+  local trees = package.loaded["claude-code.trees"]
+  local name = trees and dir and trees.removing_at(dir)
+  if name then
+    vim.notify(("claude-code: %s is being removed; not starting a session in it"):format(name), vim.log.levels.WARN)
+  end
+  return name ~= nil
+end
+M.being_removed = being_removed
+
 --- Start a new session and show it.
 ---@param title? string
 ---@param opts? { cwd?: string, id?: string, claimed?: boolean, show?: { here?: boolean } } `cwd`: run it there instead of Neovim's cwd. `id`, `claimed`: see claude_code.SessionOpts.
 ---@return claude_code.Session?
 function M.new(title, opts)
   opts = opts or {}
+  if being_removed(opts.cwd or vim.fn.getcwd()) then
+    return nil
+  end
   local session =
     Session.new({ title = title ~= "" and title or nil, cwd = opts.cwd, id = opts.id, claimed = opts.claimed })
   if session then
@@ -123,15 +140,20 @@ function M.new(title, opts)
   return session
 end
 
---- Sessions open in other Claude Code processes: session id -> pid.
+--- Claude Code processes running sessions other than this Neovim's.
 --- Best effort: reads the CLI's registry of running processes
 --- (~/.claude/sessions/<pid>.json) and keeps the ones whose pid is alive.
----@return table<string, integer>
-function M.open_elsewhere()
-  local open = {}
+---@return { id: string, pid: integer, cwd?: string }[]
+function M.running_elsewhere()
+  local out = {}
   local dir = vim.fs.joinpath(vim.env.CLAUDE_CONFIG_DIR or vim.fs.joinpath(vim.env.HOME, ".claude"), "sessions")
   if not vim.uv.fs_stat(dir) then
-    return open
+    return out
+  end
+  -- Our own sessions' processes register there too.
+  local ours = {}
+  for _, s in ipairs(live) do
+    ours[s.id] = true
   end
   for name, kind in vim.fs.dir(dir) do
     if kind == "file" and name:match("^%d+%.json$") then
@@ -140,15 +162,22 @@ function M.open_elsewhere()
         local ok, entry = pcall(vim.json.decode, f:read("*a"))
         f:close()
         local pid = ok and type(entry) == "table" and tonumber(entry.pid)
-        if pid and type(entry.sessionId) == "string" and vim.uv.kill(pid, 0) == 0 then
-          open[entry.sessionId] = pid
+        if pid and type(entry.sessionId) == "string" and not ours[entry.sessionId] and vim.uv.kill(pid, 0) == 0 then
+          local cwd = type(entry.cwd) == "string" and entry.cwd or nil
+          table.insert(out, { id = entry.sessionId, pid = pid, cwd = cwd })
         end
       end
     end
   end
-  -- Our own sessions' processes register there too.
-  for _, s in ipairs(live) do
-    open[s.id] = nil
+  return out
+end
+
+--- Sessions open in other Claude Code processes: session id -> pid.
+---@return table<string, integer>
+function M.open_elsewhere()
+  local open = {}
+  for _, process in ipairs(M.running_elsewhere()) do
+    open[process.id] = process.pid
   end
   return open
 end
@@ -160,6 +189,9 @@ function M.open(info, show_opts)
   local existing = M.find(info.sessionId)
   if existing then
     M.show(existing, show_opts)
+    return
+  end
+  if being_removed(info.cwd) then
     return
   end
   local pid = M.open_elsewhere()[info.sessionId]
@@ -186,12 +218,14 @@ end
 --- Suspending doesn't come here, and neither does quitting Neovim: a claim made
 --- with Neovim's pid (see worktree.session_env) ends with it.
 ---@param session claude_code.Session
-local function release_tree(session)
+---@param done? fun() Called once the release has finished, or straight away when there's nothing to release.
+local function release_tree(session, done)
+  done = done or function() end
   local worktree = require("claude-code.worktree")
   -- An untouched placeholder has never run a prompt, so it can't have claimed one
   -- (a session opened for a tree it holds is never a placeholder).
   if not worktree.enabled() or session:is_placeholder() then
-    return
+    return vim.schedule(done)
   end
   local id = session.id
   worktree.release_session(id, function(name, failed)
@@ -202,6 +236,7 @@ local function release_tree(session)
         vim.log.levels.WARN
       )
     end
+    done()
   end, {
     -- Reopened (e.g. from the session picker) before the release ran: it's a
     -- new Session with the same id, and `wt` keys the claim by id, so the
@@ -215,8 +250,9 @@ end
 --- End a session and remove it from Neovim (its transcript stays on disk), and
 --- release its `wt` tree.
 ---@param session claude_code.Session
-function M.close(session)
-  release_tree(session)
+---@param on_released? fun() Called once releasing its tree has finished, e.g. to remove the tree after.
+function M.close(session, on_released)
+  release_tree(session, on_released)
   session:stop()
   session.chat:wipe()
   for i, s in ipairs(live) do
