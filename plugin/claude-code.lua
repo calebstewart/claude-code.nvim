@@ -37,6 +37,9 @@ local subcommands = {
   trees = function(args)
     require("claude-code").trees(args)
   end,
+  cleanup = function()
+    require("claude-code").cleanup()
+  end,
   rename = function(args)
     require("claude-code").rename(args)
   end,

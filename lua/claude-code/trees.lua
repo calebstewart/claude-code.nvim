@@ -419,10 +419,174 @@ local function close_all(closing, done)
   check()
 end
 
+--- A Claude Code process outside this Neovim running in `tree`, if any: it
+--- would have its directory deleted under it, and the plugin can't close it.
+---@param tree table
+---@return { id: string, pid: integer, cwd?: string }?
+local function process_elsewhere(tree)
+  for _, process in ipairs(sessions.running_elsewhere()) do
+    if M.within(process.cwd, tree.path) then
+      return process
+    end
+  end
+end
+
+--- Why Neovim itself is using `tree`, if it is: a working directory in it (the
+--- global one, or any tab's or window's), or a loaded buffer with unsaved
+--- changes whose file is in it.
+---@param tree table
+---@return string[]
+local function editor_use(tree)
+  local reasons = {}
+  local cwds = { vim.fn.getcwd(-1, -1) }
+  for _, tab in ipairs(vim.api.nvim_list_tabpages()) do
+    local tabnr = vim.api.nvim_tabpage_get_number(tab)
+    table.insert(cwds, vim.fn.getcwd(-1, tabnr))
+    for _, win in ipairs(vim.api.nvim_tabpage_list_wins(tab)) do
+      table.insert(cwds, vim.fn.getcwd(vim.api.nvim_win_get_number(win), tabnr))
+    end
+  end
+  for _, dir in ipairs(cwds) do
+    if M.within(dir, tree.path) then
+      table.insert(reasons, "Neovim's working directory is in it")
+      break
+    end
+  end
+  for _, buf in ipairs(vim.api.nvim_list_bufs()) do
+    if vim.api.nvim_buf_is_loaded(buf) and vim.bo[buf].modified then
+      local name = vim.api.nvim_buf_get_name(buf)
+      if name ~= "" and M.within(name, tree.path) then
+        table.insert(reasons, ("%s has unsaved changes"):format(vim.fn.fnamemodify(name, ":~:.")))
+      end
+    end
+  end
+  return reasons
+end
+
+---@param process { pid: integer }
+---@return string
+local function elsewhere_text(process)
+  return ("a Claude Code process outside this Neovim (pid %d) is running in it"):format(process.pid)
+end
+
+--- Lines for a confirmation listing the sessions that removing closes, and what
+--- that cuts short for each; none when there are none.
+---@param closing claude_code.Session[]
+---@return string[]
+local function closing_lines(closing)
+  if #closing == 0 then
+    return {}
+  end
+  local lines = { "", "Closes the sessions open here that work in it:" }
+  for _, s in ipairs(closing) do
+    local cut = interrupts(s)
+    table.insert(lines, ("  %s%s"):format(title(s), cut and (" (" .. cut .. ")") or ""))
+  end
+  return lines
+end
+
+---@class claude_code.TreeRemoval
+---@field tree table The tree's `wt list` entry.
+---@field as? claude_code.WtSession Who to run `wt rm --yes` as.
+---@field problem? string Why `wt rm --yes` didn't run: its sessions didn't let go, ...
+---@field result? claude_code.WtResult What `wt rm --yes` returned, when it ran.
+---@field package marked? boolean remove_confirmed marked it "removing", so clears that mark.
+
+--- Why `tree` mustn't be removed, sessions open here aside: a Claude Code
+--- process outside this Neovim runs in it, or Neovim uses it (editor_use).
+--- Closing the tree's sessions doesn't change either, so a removal checks this
+--- before closing them, as well as just before `wt rm --yes`.
+---@param tree table
+---@return string?
+local function used_beyond_sessions(tree)
+  local process = process_elsewhere(tree)
+  if process then
+    return elsewhere_text(process)
+  end
+  local using = editor_use(tree)
+  if #using > 0 then
+    return table.concat(using, "; ")
+  end
+end
+
+--- Why `tree` mustn't be removed right now, just before its `wt rm --yes`: a
+--- session open here is in it (again), or used_beyond_sessions. Not whether
+--- it's busy: it's busy removing itself.
+---@param tree table
+---@return string?
+local function stop_removing(tree)
+  local back = M.sessions_in(tree)[1]
+  if back then
+    return ("%s is open in it"):format(title(back))
+  end
+  return used_beyond_sessions(tree)
+end
+
+--- Remove trees the user has confirmed removing. A tree that came into use
+--- beyond its sessions meanwhile (used_beyond_sessions: timers and callbacks
+--- run while a confirmation is open) is left alone, its sessions untouched.
+--- Each other tree is marked "removing", so no session can start in it. Then
+--- the sessions open here that work in each are closed, all at once, and
+--- waited for (close_all), and `wt rm --yes` runs for each tree, one at a
+--- time, as `wt cleanup` does.
+---
+--- Each tree stands alone. One whose sessions don't let go in time, or that
+--- comes into use again just before its `wt rm --yes` (stop_removing: Neovim
+--- keeps working while earlier trees are torn down), isn't removed (`problem`
+--- says why); the others still are. An item with a `problem` before marking
+--- (passed in, or found then) is neither marked nor touched, and only marks
+--- set here are cleared, once each tree is done with.
+---@param batch claude_code.TreeRemoval[]
+---@param callback fun(batch: claude_code.TreeRemoval[])
+local function remove_confirmed(batch, callback)
+  for _, item in ipairs(batch) do
+    item.problem = item.problem or used_beyond_sessions(item.tree)
+    if not item.problem then
+      set_busy(item.tree, "removing")
+      item.marked = true
+    end
+  end
+  local function done_with(item)
+    if item.marked then
+      item.marked = nil
+      set_busy(item.tree, nil)
+    end
+  end
+  local function remove_from(i)
+    local item = batch[i]
+    if not item then
+      return callback(batch)
+    end
+    item.problem = item.problem or stop_removing(item.tree)
+    if item.problem then
+      done_with(item)
+      return remove_from(i + 1)
+    end
+    worktree.run({ "rm", item.tree.name, "--yes" }, { cwd = item.tree.root, session = item.as }, function(result)
+      item.result = result
+      done_with(item)
+      remove_from(i + 1)
+    end)
+  end
+  local waiting = #batch
+  if waiting == 0 then
+    return callback(batch)
+  end
+  for _, item in ipairs(batch) do
+    -- One already left out (`problem` set) keeps its sessions.
+    close_all(item.problem and {} or M.sessions_in(item.tree), function(problem)
+      item.problem = item.problem or problem
+      waiting = waiting - 1
+      if waiting == 0 then
+        remove_from(1)
+      end
+    end)
+  end
+end
+
 ---@param tree table
 ---@param result claude_code.WtResult
 local function removed(tree, result)
-  set_busy(tree, nil)
   if not result.ok then
     worktree.report(result, tree.name)
     return
@@ -434,23 +598,28 @@ end
 
 --- Remove `tree`: show `wt rm`'s dry-run plan and ask, then close the sessions
 --- open here that work in it and run `wt rm --yes`. A blocked plan only says
---- why. Refuses while a Claude Code process outside this Neovim runs in it.
+--- why. Refuses while a Claude Code process outside this Neovim runs in it, or
+--- Neovim uses it (editor_use); checks both again just before `wt rm --yes`.
 ---@param tree table
 function M.remove(tree)
   if not idle(tree) then
     return
   end
-  for _, process in ipairs(sessions.running_elsewhere()) do
-    if M.within(process.cwd, tree.path) then
-      notify(
-        ("a Claude Code process outside this Neovim (pid %d) is running in %s; close it there first"):format(
-          process.pid,
-          tree.name
-        ),
-        vim.log.levels.WARN
-      )
-      return
-    end
+  local process = process_elsewhere(tree)
+  if process then
+    notify(
+      ("a Claude Code process outside this Neovim (pid %d) is running in %s; close it there first"):format(
+        process.pid,
+        tree.name
+      ),
+      vim.log.levels.WARN
+    )
+    return
+  end
+  local using = editor_use(tree)
+  if #using > 0 then
+    notify(("not removing %s: %s"):format(tree.name, table.concat(using, "; ")), vim.log.levels.WARN)
+    return
   end
   local as = identity(tree)
   set_busy(tree, "checking")
@@ -468,37 +637,262 @@ function M.remove(tree)
     end
     local lines = { ("Remove %s?"):format(tree.name), "" }
     vim.list_extend(lines, M.plan_lines(plan or {}))
-    local closing = M.sessions_in(tree)
-    if #closing > 0 then
-      table.insert(lines, "")
-      table.insert(lines, "Closes the sessions open here that work in it:")
-      for _, s in ipairs(closing) do
-        local cut = interrupts(s)
-        table.insert(lines, ("  %s%s"):format(title(s), cut and (" (" .. cut .. ")") or ""))
-      end
-    end
+    vim.list_extend(lines, closing_lines(M.sessions_in(tree)))
     -- Still "checking" while asking, so nothing else starts on the tree.
     if vim.fn.confirm(table.concat(lines, "\n"), "&Remove\n&Cancel", 2, "Warning") ~= 1 then
       return set_busy(tree, nil)
     end
-    -- From here no session may open in it (see M.removing_at, work.lua).
-    set_busy(tree, "removing")
-    close_all(M.sessions_in(tree), function(problem)
-      -- A session reopened in it anyway (e.g. by a plugin bypassing the
-      -- checks) would lose its directory: `wt rm` runs as the holder's id.
-      local back = M.sessions_in(tree)[1]
-      if not problem and back then
-        problem = ("%s is open in it again"):format(title(back))
+    -- remove_confirmed marks it "removing" (from there no session may open in
+    -- it, see M.removing_at, work.lua) in this same tick, unless it's left
+    -- alone, so "checking" ends here.
+    set_busy(tree, nil)
+    remove_confirmed({ { tree = tree, as = as } }, function(batch)
+      local item = batch[1]
+      if item.problem then
+        notify(("not removing %s: %s"):format(tree.name, item.problem), vim.log.levels.ERROR)
+      else
+        removed(tree, item.result)
       end
-      if problem then
-        set_busy(tree, nil)
-        notify(("not removing %s: %s"):format(tree.name, problem), vim.log.levels.ERROR)
-        return
-      end
-      worktree.run({ "rm", tree.name, "--yes" }, { cwd = tree.root, session = as }, function(done)
-        removed(tree, done)
-      end)
     end)
+  end)
+end
+
+-- Clean up stale trees ---------------------------------------------------------
+
+---@class claude_code.StaleTree
+---@field tree table The tree's `wt list` entry.
+---@field plan table `wt cleanup --stale`'s removal plan for it (as `wt rm` makes one).
+---@field status "remove"|"skip"|"keep" `remove`: in the batch; `skip`: `wt` would refuse to remove it; `keep`: in use in this Neovim, though `wt` sees its holder as ended.
+---@field reasons string[] Why it's skipped or kept.
+---@field excluded? boolean Left out of the batch by the user (the cleanup view's <Tab>).
+
+--- Why `tree` is in use in this Neovim, or busy, though `wt` may see the session
+--- holding it as ended; empty when it isn't. That's the case when:
+---
+--- - a session open here holds it: e.g. one resumed after Neovim restarted
+---   that hasn't started its process yet (which claims the tree again), so its
+---   claim still has the old Neovim's pid;
+--- - a session open here runs in it, though it holds another tree, or none;
+--- - a Claude Code process outside this Neovim runs in it;
+--- - a window's working directory is in it, or a modified buffer's file is;
+--- - an action (opening, removing, ...) is under way on it.
+---@param tree table
+---@return string[]
+function M.in_use(tree)
+  local reasons = {}
+  local holder = type(tree.holder) == "table" and tree.holder.session or nil
+  for _, s in ipairs(M.sessions_in(tree)) do
+    if s.id == holder then
+      table.insert(reasons, ("held by %s, which is open in this Neovim"):format(title(s)))
+    else
+      table.insert(reasons, ("%s is open in this Neovim and works in it"):format(title(s)))
+    end
+  end
+  local process = process_elsewhere(tree)
+  if process then
+    table.insert(reasons, elsewhere_text(process))
+  end
+  vim.list_extend(reasons, editor_use(tree))
+  local doing = M.busy(tree)
+  if doing then
+    table.insert(reasons, ("busy (%s)"):format(doing))
+  end
+  return reasons
+end
+
+---@class claude_code.StaleOpts
+---@field reclaimed? table<string, boolean> Trees (by M.key) already claimed again for their holder open here, which aren't claimed again. A view passes the same table on each load, so that a failing claim isn't retried on every reload.
+
+--- The project's stale trees: `wt cleanup --stale`'s dry run (trees whose
+--- holder has ended), with `wt list`'s entry for each. Each is to be removed,
+--- skipped (`wt` would refuse: uncommitted changes, ...), or kept (in use here,
+--- see M.in_use). A kept tree whose holder is a session open here is claimed
+--- again for that session with Neovim's pid (worktree.reclaim), so that `wt`,
+--- and other sessions' cleanups, see it as live again. Runs in the background,
+--- and removes nothing.
+---@param dir string In the project, e.g. Neovim's cwd.
+---@param callback fun(stale: claude_code.StaleTree[]?, failed: claude_code.WtResult?)
+---@param opts? claude_code.StaleOpts
+function M.stale(dir, callback, opts)
+  opts = opts or {}
+  local listed, planned
+  local function joined()
+    if not (listed and planned) then
+      return
+    end
+    if not planned.ok then
+      return callback(nil, planned)
+    end
+    local data = listed.ok and listed.data or {}
+    local by_name = {}
+    for _, tree in ipairs(data.trees or {}) do
+      by_name[tree.name] = tree
+    end
+    local out = {}
+    for _, plan in ipairs(planned.data.plans or {}) do
+      local tree = by_name[plan.name]
+        or {
+          name = plan.name,
+          path = plan.path,
+          slot = plan.slot,
+          branch = plan.branch,
+          state = plan.state,
+          exists = plan.exists,
+          holder = plan.holder,
+        }
+      tree.root = tree.root or data.root or dir
+      local entry = { tree = tree, plan = plan, reasons = M.in_use(tree) }
+      local blocked = type(plan.blocked) == "table" and plan.blocked or {}
+      if #entry.reasons > 0 then
+        entry.status = "keep"
+        vim.list_extend(entry.reasons, blocked)
+        local holder = type(tree.holder) == "table" and tree.holder or {}
+        local open = holder.session and sessions.find(holder.session)
+        local key = M.key(tree)
+        if open and holder.state == "ended" and not (opts.reclaimed and opts.reclaimed[key]) then
+          if opts.reclaimed then
+            opts.reclaimed[key] = true
+          end
+          worktree.reclaim(open.id, tree, nil, function(result)
+            if result and result.ok then
+              notify(("%s's claim had lapsed, though %s is open here; claimed it again"):format(tree.name, title(open)))
+            end
+          end)
+        end
+      elseif #blocked > 0 then
+        entry.status, entry.reasons = "skip", blocked
+      else
+        entry.status = "remove"
+      end
+      table.insert(out, entry)
+    end
+    callback(out)
+  end
+  worktree.list(dir, function(result)
+    listed = result
+    joined()
+  end, { fresh = true })
+  worktree.run({ "cleanup", "--stale" }, { cwd = dir }, function(result)
+    planned = result
+    joined()
+  end)
+end
+
+--- How many batches of stale trees are being removed (see M.cleaning).
+local cleaning = 0
+
+--- Whether stale trees are being removed (M.remove_stale), e.g. so that a view
+--- of them looks again once that's done, rather than after each tree.
+---@return boolean
+function M.cleaning()
+  return cleaning > 0
+end
+
+--- A tree's line in the confirmation.
+---@param plan table
+---@return string
+local function plan_summary(plan)
+  local holder = type(plan.holder) == "table" and plan.holder or {}
+  local who = holder.session and ("last held by %s"):format(worktree.describe_holder(holder)) or "not held"
+  local branch = ""
+  if plan.branch then
+    local action = ({ ["-d"] = "deletes branch %s if merged", ["-D"] = "deletes branch %s" })[plan.branch_action]
+    branch = " · " .. (action or "keeps branch %s"):format(plan.branch)
+  end
+  return ("  %s  (slot %s) · %s%s"):format(plan.name, tostring(plan.slot), who, branch)
+end
+
+--- Remove the stale trees (from M.stale) that are to be removed and aren't left
+--- out, after one confirmation listing them. A tree that has come into use here
+--- since (M.in_use) is left out, and the confirmation says so.
+---
+--- Every tree in the batch is marked "removing", so no session can start in it,
+--- and removed as `:Claude trees` removes one (remove_confirmed): with
+--- `wt rm <name> --yes`, not `wt cleanup --stale --yes`. `cleanup --yes` decides
+--- again which trees are stale, so it would remove a tree left out here, or one
+--- that became stale since, and only exactly the trees confirmed should go.
+--- `wt rm --yes` still checks its tree again: it refuses one a live session has
+--- claimed since, or that has changes now.
+---
+--- Reports what was removed and what wasn't, and why, then has views of the
+--- trees look again (worktree.invalidate).
+---@param stale claude_code.StaleTree[]
+---@param callback? fun(batch: claude_code.TreeRemoval[]?) The batch once it's done, or nil when nothing was removed (nothing to remove, or cancelled).
+function M.remove_stale(stale, callback)
+  callback = callback or function() end
+  local batch, left_out = {}, {}
+  for _, entry in ipairs(stale) do
+    if entry.status == "remove" and not entry.excluded then
+      local using = M.in_use(entry.tree)
+      if #using > 0 then
+        table.insert(left_out, ("  %s: %s"):format(entry.tree.name, table.concat(using, "; ")))
+      else
+        table.insert(batch, entry)
+      end
+    end
+  end
+  if #batch == 0 then
+    local message = "no stale trees to remove"
+    if #left_out > 0 then
+      message = message .. "; left out, now in use here:\n" .. table.concat(left_out, "\n")
+    end
+    notify(message)
+    return callback(nil)
+  end
+  local lines = { ("Remove %d stale tree%s?"):format(#batch, #batch == 1 and "" or "s"), "" }
+  local closing = {}
+  for _, entry in ipairs(batch) do
+    table.insert(lines, plan_summary(entry.plan))
+    vim.list_extend(closing, M.sessions_in(entry.tree))
+  end
+  if #left_out > 0 then
+    table.insert(lines, "")
+    table.insert(lines, "Left out, now in use here:")
+    vim.list_extend(lines, left_out)
+  end
+  vim.list_extend(lines, closing_lines(closing))
+  table.insert(lines, "")
+  table.insert(lines, "wt checks each tree again as it removes it.")
+  if vim.fn.confirm(table.concat(lines, "\n"), "&Remove\n&Cancel", 2, "Warning") ~= 1 then
+    return callback(nil)
+  end
+  local items = {}
+  for _, entry in ipairs(batch) do
+    -- As nobody, so `wt rm` refuses it if a live session has claimed it since.
+    local item = { tree = entry.tree }
+    -- In case anything ran while the question was open.
+    local using = M.in_use(entry.tree)
+    if #using > 0 then
+      item.problem = "now in use here: " .. table.concat(using, "; ")
+    end
+    -- The others are marked "removing" by remove_confirmed: from there no
+    -- session may start in them (see M.removing_at).
+    table.insert(items, item)
+  end
+  cleaning = cleaning + 1
+  remove_confirmed(items, function(done)
+    cleaning = cleaning - 1
+    local gone, kept = {}, {}
+    for _, item in ipairs(done) do
+      if item.result and item.result.ok then
+        table.insert(gone, item.tree.name)
+      else
+        local why = item.problem or worktree.describe_failure(item.result, item.tree.name)
+        table.insert(kept, ("  %s: %s"):format(item.tree.name, (why:gsub("\n", "\n    "))))
+      end
+    end
+    local message = {}
+    if #gone > 0 then
+      local count = ("%d stale tree%s"):format(#gone, #gone == 1 and "" or "s")
+      table.insert(message, ("removed %s: %s"):format(count, table.concat(gone, ", ")))
+    end
+    if #kept > 0 then
+      table.insert(message, #gone > 0 and "not removed:" or "removed no stale trees; not removed:")
+      vim.list_extend(message, kept)
+    end
+    notify(table.concat(message, "\n"), #kept > 0 and vim.log.levels.WARN or vim.log.levels.INFO)
+    worktree.invalidate()
+    callback(done)
   end)
 end
 

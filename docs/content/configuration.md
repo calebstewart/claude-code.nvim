@@ -241,7 +241,8 @@ Optional integration with `wt`, the CLI behind the [worktree skill](https://cale
 which gives each piece of work its own git worktree and test environment. The plugin only runs `wt` and reads
 its output; it never names, sets up or removes trees on its own. Without `wt` installed, nothing changes.
 
-With it on, `:checkhealth claude-code` has a section for `wt`, and:
+With it on, `:checkhealth claude-code` has a section for `wt`, which also shows the problems `wt status` finds
+in the project (stale, broken or orphaned trees, …) with their fixes, and:
 
 - **A session in a tree starts with the tree's environment.** When a session's directory is inside a `wt` tree,
   its `claude` process gets what `wt env <name>` prints: the variables the tree's setup hook produced (test
@@ -327,6 +328,7 @@ here that work in it, and its environment. `name` pre-fills the search.
 | <kbd>C-r</kbd> | Release the tree |
 | <kbd>C-x</kbd> | Remove the tree (see below) |
 | <kbd>C-g</kbd> | Toggle between this project's trees and every project's |
+| <kbd>C-l</kbd> | Switch to the [cleanup view](#cleaning-up-stale-trees) of the project's stale trees, and back |
 | <kbd>C-n</kbd>/<kbd>C-p</kbd>, <kbd>C-j</kbd>/<kbd>C-k</kbd>, arrows | Move |
 | <kbd>Esc</kbd> / <kbd>C-c</kbd> | Close |
 
@@ -348,12 +350,75 @@ here that work in it, and its environment. `name` pre-fills the search.
   says. Their transcripts stay on disk. The plugin waits for their processes to exit and their claims to be
   released, then runs `wt rm --yes`. If a process is still running after 10 seconds, the tree is not removed:
   you're told which session it was, and can try again. It also refuses to remove a tree a Claude Code process
-  outside this Neovim is running in.
+  outside this Neovim is running in, or one Neovim itself is using: a working directory (global, tab or
+  window) inside it, or a buffer with unsaved changes whose file is in it. It checks this again once you've
+  confirmed, before closing any session, so they're left alone if the tree came into use meanwhile, and once
+  more just before `wt rm --yes`.
 - **While a tree is being removed, no session can start in it.** Opening it from the picker, `:Claude work`,
   and resuming or starting a session there (from the session picker too) are refused until the removal ends.
 - **Every `wt` call runs in the background.** A row shows what's under way on it (checking, opening,
   removing, …), and other actions on that tree are refused meanwhile. The list reloads after each action, on
   `User ClaudeCodeWorktreesChanged`, and when Neovim regains focus.
+- Without `wt`, or with `worktree.enabled = false`, the command just says so.
+
+### Cleaning up stale trees
+
+`:Claude cleanup` (or `require("claude-code").cleanup()`, or <kbd>C-l</kbd> in the tree picker) shows the
+tree picker's cleanup view. It lists the trees in the project (the one containing Neovim's cwd) that
+`wt cleanup --stale` would remove: trees whose holder session has ended. Sessions open in this Neovim keep
+their trees live even while they're suspended, so their trees normally aren't listed. Each row says what
+happens to the tree:
+
+- `×` **to remove**;
+- `!` **skipped**: `wt` won't remove it, for example because of uncommitted changes or unpushed commits. The
+  row and preview give `wt`'s reasons;
+- `●` **kept**: `wt` sees it as stale, but it's in use here, and the plugin never removes it. That's when:
+  - a session open in this Neovim holds it. Its claim can still have an old Neovim's pid, for example when
+    the session was resumed after a restart in a directory other than the tree, so it hasn't claimed the
+    tree again yet. The view then claims the tree again for that session, with this Neovim's pid, and says
+    so. That also stops other sessions' cleanups from removing it;
+  - a session open here runs in it, even if that session holds another tree or none;
+  - a Claude Code process outside this Neovim runs in it;
+  - a window's working directory is in it, or a buffer with unsaved changes has a file in it;
+  - something else is under way on it, such as a removal from the tree picker.
+
+  To remove a tree in use here anyway, use <kbd>C-x</kbd> in the tree picker, which closes its sessions
+  first.
+- `○` **left out**: you left it out with <kbd>Tab</kbd>.
+
+The preview shows `wt`'s plan for the tree: its changes, teardown, and what happens to its branch.
+
+| Key | |
+|---|---|
+| <kbd>Enter</kbd> | Remove the trees marked to remove, after one confirmation |
+| <kbd>Tab</kbd> | Leave the selected tree out of the cleanup, or put it back |
+| <kbd>C-l</kbd> | Back to the tree picker |
+| <kbd>C-n</kbd>/<kbd>C-p</kbd>, <kbd>C-j</kbd>/<kbd>C-k</kbd>, arrows | Move |
+| <kbd>Esc</kbd> / <kbd>C-c</kbd> | Close |
+
+- **One confirmation** lists every tree to remove, whether or not the search shows it. Before asking, the
+  plugin checks each tree again, and leaves out any that came into use here since the list was loaded. The
+  question names them too.
+- **Exactly the trees you confirmed are removed.** The plugin runs `wt rm <name> --yes` for each tree, one at
+  a time, rather than `wt cleanup --stale --yes`. That's because `cleanup --yes` decides again which trees are
+  stale, so it would also remove trees the view kept or you left out, and trees that became stale after the
+  list was loaded. `wt rm --yes` still checks each tree again, and refuses one that a live session has
+  claimed since, or that has changes now.
+- **While the trees are being removed, no session can start in any of them**, as when removing a tree from the
+  picker. The removal also follows the picker's: sessions open here in a tree are closed first, and if one
+  doesn't stop within 10 seconds, that tree isn't removed. Normally there are none, since such trees are
+  kept. Trees are removed one after another, and Neovim stays usable meanwhile, so just before each tree's
+  removal the plugin checks it again. It's skipped if a session open here is in it, a Claude Code process
+  outside this Neovim runs in it, a working directory (global, tab or window) is inside it, or a buffer with
+  unsaved changes has a file in it.
+- **One failure doesn't stop the rest.** Each tree is removed on its own. When it's done, a notification
+  lists the trees removed, and the ones that weren't, with why: `wt`'s reason and hint (for example a failed
+  teardown, which leaves the tree marked broken, as `wt` does), or the check that stopped it. The list then
+  reloads.
+- **Every `wt` call runs in the background**, including the dry run. The dry run can take a few seconds, since
+  `wt` checks each tree's PR state and runs teardown's dry run.
+- Nothing runs on a timer or at startup. `:checkhealth claude-code` shows `wt status` for the project, and that
+  includes stale trees.
 - Without `wt`, or with `worktree.enabled = false`, the command just says so.
 
 ### worktree.enabled

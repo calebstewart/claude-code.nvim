@@ -102,6 +102,28 @@ function M.check_worktree()
     return
   end
   vim.health.ok(("%s (%s)"):format(vim.trim(done.stdout or ""), path))
+
+  -- Problems in the project of Neovim's cwd. Only here, on demand: no timer or
+  -- startup check runs `wt status`.
+  local status = worktree.run({ "status" }, { cwd = vim.fn.getcwd(), timeout = 15000 }) --[[@as claude_code.WtResult]]
+  if not status.ok then
+    vim.health.info(("`wt status` in %s: %s"):format(vim.fn.getcwd(), worktree.describe_failure(status)))
+    return
+  end
+  local project = tostring(status.data.project or "this project")
+  local anomalies = type(status.data.anomalies) == "table" and status.data.anomalies or {}
+  if #anomalies == 0 then
+    vim.health.ok(("`wt status`: %s has nothing to fix"):format(project))
+    return
+  end
+  for _, problem in ipairs(anomalies) do
+    local advice = { ("fix: %s"):format(tostring(problem.fix)) }
+    if problem.kind == "STALE" then
+      table.insert(advice, "or `:Claude cleanup`, which keeps trees still in use in this Neovim")
+    end
+    local text = ("`wt status` (%s): %s %s: %s"):format(project, problem.kind, problem.subject, problem.detail)
+    vim.health.warn(text, advice)
+  end
 end
 
 return M

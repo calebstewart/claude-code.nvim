@@ -136,6 +136,19 @@ function M.trees(query)
   require("claude-code.ui.trees").open({ scope = "project", query = vim.trim(query or "") })
 end
 
+--- Clean up the current project's stale `wt` trees: the tree picker's cleanup
+--- view, over `wt cleanup --stale`'s dry run, showing the trees to remove and
+--- the ones skipped or kept, with why. Enter removes them, after one
+--- confirmation. Needs the worktree integration; `wt` runs in the background.
+function M.cleanup()
+  local problem = require("claude-code.work").unavailable("cleanup")
+  if problem then
+    vim.notify("claude-code: " .. problem, vim.log.levels.ERROR)
+    return
+  end
+  require("claude-code.ui.trees").open({ mode = "cleanup", scope = "project", query = "" })
+end
+
 --- Rename the current session. With no name, asks for one.
 ---@param name? string
 function M.rename(name)
