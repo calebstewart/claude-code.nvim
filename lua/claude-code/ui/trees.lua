@@ -10,6 +10,11 @@
 -- Lists `wt list` for the current project (or every project's, with <C-g>).
 -- The actions are in claude-code.trees; the list reloads after each one, on
 -- `User ClaudeCodeWorktreesChanged`, and when Neovim regains focus.
+--
+-- Its cleanup mode (`:Claude cleanup`, or <C-l>) lists the project's stale
+-- trees instead (`wt cleanup --stale`'s dry run): the ones to remove, the ones
+-- `wt` would skip, and the ones kept for being in use here, each with why.
+-- <CR> removes the batch, after one confirmation (trees.remove_stale).
 
 local api = vim.api
 local events = require("claude-code.events")
@@ -24,7 +29,8 @@ local ns = api.nvim_create_namespace("claude-code.trees")
 local M = {}
 
 ---@class claude_code.TreePickerState
----@field scope "project"|"all"
+---@field mode? "trees"|"cleanup" Default "trees".
+---@field scope "project"|"all" Of "trees"; "cleanup" is always the project's.
 ---@field query string
 ---@field selected? string Key (trees.key) of the selected tree.
 
@@ -50,6 +56,10 @@ end
 ---@field private closed boolean
 ---@field private augroup integer
 ---@field private unsubscribe fun()
+---@field private stale table<string, claude_code.StaleTree> In cleanup mode, by tree (trees.key).
+---@field private excluded table<string, boolean> Trees left out of the cleanup (<Tab>), by trees.key.
+---@field private reclaimed table<string, boolean> See trees.stale.
+---@field private reload_pending? boolean In cleanup mode, a reload is about to run.
 local Picker = {}
 Picker.__index = Picker
 
@@ -98,6 +108,29 @@ local function status(tree)
   return " ", "Normal", "ready"
 end
 
+--- The order of a cleanup's rows: what's removed first.
+local STALE_ORDER = { remove = 1, skip = 2, keep = 3 }
+
+--- In cleanup mode: a stale tree's glyph and highlight, and what happens to it,
+--- in a few words.
+---@param entry claude_code.StaleTree
+---@param excluded? boolean
+---@return string glyph, string hl, string label
+local function stale_status(entry, excluded)
+  local doing = trees.busy(entry.tree)
+  if doing then
+    return "…", "ClaudeCodeStatus", doing .. "…"
+  end
+  if entry.status == "keep" then
+    return "●", "ClaudeCodeToolSuccess", "kept: in use here"
+  elseif entry.status == "skip" then
+    return "!", "DiagnosticWarn", "skipped"
+  elseif excluded then
+    return "○", "ClaudeCodeMuted", "left out"
+  end
+  return "×", "DiagnosticError", "to remove"
+end
+
 ---@param state? claude_code.TreePickerState
 function M.open(state)
   local self = setmetatable({
@@ -109,7 +142,11 @@ function M.open(state)
     loading = true,
     generation = 0,
     closed = false,
+    stale = {},
+    excluded = {},
+    reclaimed = {},
   }, Picker)
+  self.state.mode = self.state.mode or "trees"
   self:create()
   self:load()
 end
@@ -162,7 +199,18 @@ function Picker:create()
     group = self.augroup,
     pattern = worktree.CHANGED,
     callback = function()
-      self:load()
+      if not self:cleanup() then
+        return self:load()
+      end
+      -- A cleanup looks again once its removals are all done (it invalidates),
+      -- and once for changes that come together: its dry run is slow.
+      if not trees.cleaning() and not self.reload_pending then
+        self.reload_pending = true
+        vim.defer_fn(function()
+          self.reload_pending = false
+          self:load()
+        end, 100)
+      end
     end,
   })
   api.nvim_create_autocmd("FocusGained", {
@@ -233,7 +281,8 @@ function Picker:layout()
   })
   vim.wo[self.wins.list].cursorline = true
   vim.wo[self.wins.preview].wrap = true
-  local hints = " ⏎ open · ^A new · ^T claim · ^R release · ^X remove · ^G all projects · esc "
+  local hints = self:cleanup() and " ⏎ remove them · tab leave out / put back · ^L all trees · esc "
+    or " ⏎ open · ^A new · ^T claim · ^R release · ^X remove · ^G all projects · ^L stale · esc "
   api.nvim_win_set_config(self.wins.preview, {
     footer = { { clip(hints, width - left - 4), "ClaudeCodeMuted" } },
     footer_pos = "right",
@@ -250,6 +299,29 @@ function Picker:load()
   local generation = self.generation
   self.loading = true
   self:filter()
+  if self:cleanup() then
+    trees.stale(vim.fn.getcwd(), function(stale, failed)
+      if self.closed or generation ~= self.generation then
+        return
+      end
+      self.loading = false
+      self.error = failed and worktree.describe_failure(failed, "wt cleanup") or nil
+      stale = stale or {}
+      table.sort(stale, function(a, b)
+        if a.status ~= b.status then
+          return STALE_ORDER[a.status] < STALE_ORDER[b.status]
+        end
+        return a.tree.name < b.tree.name
+      end)
+      self.stale, self.trees = {}, {}
+      for _, entry in ipairs(stale) do
+        self.stale[trees.key(entry.tree)] = entry
+        table.insert(self.trees, entry.tree)
+      end
+      self:filter()
+    end, { reclaimed = self.reclaimed })
+    return
+  end
   local function done(result, flatten)
     if self.closed or generation ~= self.generation then
       return
@@ -322,11 +394,16 @@ function Picker:render()
   for i, tree in ipairs(self.shown) do
     local glyph, hl = status(tree)
     local right = { ("slot %s"):format(tostring(tree.slot or "?")), holder_short(tree) }
-    if self.state.scope == "all" and tree.project then
+    local entry = self:cleanup() and self.stale[trees.key(tree)]
+    if entry then
+      local label
+      glyph, hl, label = stale_status(entry, self.excluded[trees.key(tree)])
+      table.insert(right, 1, entry.reasons[1] and clip(entry.reasons[1], math.floor(width / 3)) or label)
+    elseif self.state.scope == "all" and tree.project then
       table.insert(right, 1, tree.project)
     end
     local doing = trees.busy(tree)
-    if doing then
+    if doing and not entry then
       table.insert(right, doing .. "…")
     end
     if current and vim.tbl_contains(trees.sessions_in(tree), current) then
@@ -346,11 +423,11 @@ function Picker:render()
   end
   if #lines == 0 then
     if self.loading then
-      lines = { "  Loading…" }
+      lines = { self:cleanup() and "  Looking for stale trees…" or "  Loading…" }
     elseif self.error then
       lines = vim.split("  " .. self.error, "\n", { plain = true })
     else
-      lines = { "  No trees" }
+      lines = { self:cleanup() and "  No stale trees" or "  No trees" }
     end
   end
 
@@ -379,13 +456,24 @@ function Picker:render()
     end
   end
 
-  local scope = self.state.scope == "project" and vim.fn.fnamemodify(vim.fn.getcwd(), ":t") or "all projects"
+  local project = vim.fn.fnamemodify(vim.fn.getcwd(), ":t")
+  local scope = (self.state.scope == "project" or self:cleanup()) and project or "all projects"
   local count = #self.shown == #self.trees and tostring(#self.trees) or ("%d/%d"):format(#self.shown, #self.trees)
+  if self:cleanup() then
+    local tally = { remove = 0, skip = 0, keep = 0, out = 0 }
+    for key, entry in pairs(self.stale) do
+      local what = entry.status == "remove" and self.excluded[key] and "out" or entry.status
+      tally[what] = tally[what] + 1
+    end
+    local t = tally
+    count = ("%d to remove · %d left out · %d skipped · %d kept"):format(t.remove, t.out, t.skip, t.keep)
+  end
   if self.loading and #self.trees > 0 then
     count = count .. " · refreshing"
   end
+  local name = self:cleanup() and "Stale trees" or "Trees"
   api.nvim_win_set_config(win, {
-    title = { { (" Trees · %s "):format(scope), "ClaudeCodePickerTitle" } },
+    title = { { (" %s · %s "):format(name, scope), "ClaudeCodePickerTitle" } },
     title_pos = "left",
     footer = { { (" %s "):format(count), "ClaudeCodeMuted" } },
     footer_pos = "right",
@@ -422,6 +510,26 @@ function Picker:render_preview()
     add(vim.fn.fnamemodify(tree.path, ":~"), "ClaudeCodeMuted")
   end
   add("")
+  local entry = self:cleanup() and self.stale[trees.key(tree)]
+  if entry then
+    local excluded = self.excluded[trees.key(tree)]
+    local glyph, stale_hl = stale_status(entry, excluded)
+    local headline = ({
+      remove = excluded and "Left out of this cleanup (tab puts it back)" or "Removed by this cleanup",
+      skip = "Skipped: wt won't remove it",
+      keep = "Kept: in use in this Neovim, though wt sees it as stale",
+    })[entry.status]
+    add(("%s %s"):format(glyph, headline), stale_hl)
+    for _, reason in ipairs(entry.reasons) do
+      add("  " .. reason, stale_hl)
+    end
+    add("")
+    add("wt's plan", "ClaudeCodeTitle")
+    for _, line in ipairs(trees.plan_lines(entry.plan)) do
+      add(line, "ClaudeCodeMuted")
+    end
+    add("")
+  end
   add("State: " .. label, label == "ready" and "Normal" or hl)
   local holder = type(tree.holder) == "table" and tree.holder or {}
   if holder.session then
@@ -501,8 +609,12 @@ function Picker:map_keys()
   ---@param lhs string
   ---@param action fun(tree: table)
   ---@param close? boolean Close the picker first.
-  local function act(lhs, action, close)
+  ---@param cleanup? fun() What `lhs` does in cleanup mode instead (default: nothing).
+  local function act(lhs, action, close, cleanup)
     map(lhs, function()
+      if self:cleanup() then
+        return cleanup and cleanup()
+      end
       local tree = self.shown[self.index]
       if not tree then
         return
@@ -523,11 +635,36 @@ function Picker:map_keys()
       self:move(-1)
     end)
   end
-  act("<CR>", trees.open, true)
+  act("<CR>", trees.open, true, function()
+    self:remove_stale()
+  end)
   act("<C-t>", trees.claim)
   act("<C-r>", trees.release)
   act("<C-x>", trees.remove)
+  map("<Tab>", function()
+    local tree = self:cleanup() and self.shown[self.index]
+    local entry = tree and self.stale[trees.key(tree)]
+    if not entry then
+      return
+    end
+    if entry.status ~= "remove" then
+      vim.notify(("claude-code: %s isn't removed by this cleanup: %s"):format(tree.name, entry.reasons[1] or "?"))
+      return
+    end
+    local key = trees.key(tree)
+    self.excluded[key] = not self.excluded[key] or nil
+    self:render()
+  end)
+  map("<C-l>", function()
+    self.state.mode = self:cleanup() and "trees" or "cleanup"
+    self.index, self.trees, self.stale, self.state.selected = 1, {}, {}, nil
+    self:layout()
+    self:load()
+  end)
   map("<C-a>", function()
+    if self:cleanup() then
+      return
+    end
     self:close()
     require("claude-code.ui.input").open({
       title = "Work on (story id, branch or description)",
@@ -544,6 +681,9 @@ function Picker:map_keys()
     })
   end)
   map("<C-g>", function()
+    if self:cleanup() then
+      return
+    end
     self.state.scope = self.state.scope == "project" and "all" or "project"
     self.index, self.trees = 1, {}
     self:load()
@@ -553,6 +693,33 @@ function Picker:map_keys()
       self:close()
     end)
   end
+end
+
+--- Whether it's showing the stale trees (cleanup mode).
+---@return boolean
+function Picker:cleanup()
+  return self.state.mode == "cleanup"
+end
+
+--- Remove the stale trees listed, but the ones left out, after one
+--- confirmation (trees.remove_stale). All of them, not only the ones the search
+--- shows: <Tab> is what leaves one out. Once it's done, the list is loaded again.
+---@private
+function Picker:remove_stale()
+  if self.loading then
+    vim.notify("claude-code: still looking for stale trees; try again once the list is loaded")
+    return
+  end
+  local stale = {}
+  for _, tree in ipairs(self.trees) do
+    local key = trees.key(tree)
+    local entry = self.stale[key]
+    if entry then
+      entry.excluded = self.excluded[key]
+      table.insert(stale, entry)
+    end
+  end
+  trees.remove_stale(stale)
 end
 
 function Picker:close()

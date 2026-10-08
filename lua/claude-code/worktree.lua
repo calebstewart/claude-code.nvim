@@ -43,6 +43,18 @@ M.outcomes = {
 --- Commands that change which trees exist or who holds them.
 local MUTATING = { new = true, adopt = true, claim = true, release = true, rm = true, cleanup = true, setup = true }
 
+--- Commands that only print a plan unless given `--yes`.
+local DRY_RUN = { rm = true, cleanup = true }
+
+--- Whether `wt <args>` may change the trees: a dry run (`rm`, `cleanup`
+--- without `--yes`) doesn't, so it needn't tell views to reload (which would
+--- run the cleanup view's dry run again, and again).
+---@param args string[]
+---@return boolean
+local function mutating(args)
+  return MUTATING[args[1]] == true and not (DRY_RUN[args[1]] and not vim.tbl_contains(args, "--yes"))
+end
+
 --- Blanks the variables `wt` falls back on for the session's identity, so a
 --- Neovim started from inside a Claude session never acts as that session:
 --- identity is only ever passed explicitly (`opts.session`). `wt` treats an
@@ -179,7 +191,8 @@ end
 function M.run(args, opts, callback)
   opts = opts or {}
   local cmd = command(args, opts)
-  if MUTATING[args[1]] then
+  local changes = mutating(args)
+  if changes then
     forget()
   end
   if not cmd then
@@ -194,7 +207,7 @@ function M.run(args, opts, callback)
   end
 
   local function finish(done)
-    if MUTATING[args[1]] then
+    if changes then
       M.invalidate()
     end
     return M.parse(done.code, done.stdout, done.stderr)
@@ -460,11 +473,12 @@ function M.describe_holder(holder)
   return ("session %s"):format(tostring(holder.session):sub(1, 8))
 end
 
---- Show why a `wt` command failed: who holds the tree (held), or `wt`'s reason
---- and hint.
+--- Why a `wt` command failed, in words: who holds the tree (held), or `wt`'s
+--- reason and hint.
 ---@param result claude_code.WtResult
 ---@param what? string The tree, for the message, e.g. its name.
-function M.report(result, what)
+---@return string
+function M.describe_failure(result, what)
   what = what or (result.data and result.data.name) or "the worktree"
   local message
   if result.outcome == "held" and result.data and result.data.holder then
@@ -477,7 +491,15 @@ function M.report(result, what)
   if result.hint and result.outcome ~= "held" then
     message = message .. "\nhint: " .. result.hint
   end
-  vim.notify("claude-code: " .. message, result.outcome == "held" and vim.log.levels.WARN or vim.log.levels.ERROR)
+  return message
+end
+
+--- Show why a `wt` command failed (M.describe_failure).
+---@param result claude_code.WtResult
+---@param what? string The tree, for the message, e.g. its name.
+function M.report(result, what)
+  local level = result.outcome == "held" and vim.log.levels.WARN or vim.log.levels.ERROR
+  vim.notify("claude-code: " .. M.describe_failure(result, what), level)
 end
 
 ---@class claude_code.WtClaimOpts
