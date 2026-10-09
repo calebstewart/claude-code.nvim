@@ -843,6 +843,8 @@ end
 local function fit(row, width)
   local out, used = {}, 0
   for _, chunk in ipairs(row) do
+    -- A buffer line can't hold a newline, and a description or activity may carry one.
+    chunk = { (chunk[1]:gsub("%s*[\r\n]+%s*", " ")), chunk[2] }
     local w = vim.fn.strdisplaywidth(chunk[1])
     if used + w > width then
       local room = math.max(width - used - 1, 0)

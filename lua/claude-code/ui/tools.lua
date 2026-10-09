@@ -172,7 +172,9 @@ end
 ---@param sub claude_code.Subagent
 ---@return string
 function M.subagent_activity(sub)
-  local parts = { sub.activity or (sub.background and "Running in the background" or "Starting…") }
+  -- Progress descriptions can span lines (a multi-line command, say); this is one line.
+  local activity = sub.activity and (sub.activity:gsub("%s*[\r\n]+%s*", " "))
+  local parts = { activity or (sub.background and "Running in the background" or "Starting…") }
   vim.list_extend(parts, stats(sub))
   return truncate(table.concat(parts, " · "), 120)
 end
