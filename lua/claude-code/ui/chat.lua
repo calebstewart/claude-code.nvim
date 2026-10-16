@@ -246,6 +246,17 @@ function Chat.new(opts)
       end
     end,
   })
+  -- The transcript is read-only, so it's always entered in normal mode: arriving
+  -- from the prompt in insert mode would otherwise leave keys typed there failing
+  -- with "modifiable is off" instead of running the transcript's mappings.
+  api.nvim_create_autocmd({ "WinEnter", "BufEnter" }, {
+    group = group,
+    callback = function()
+      if api.nvim_get_current_buf() == self.transcript.buf and api.nvim_get_mode().mode:match("^[iR]") then
+        vim.cmd("stopinsert")
+      end
+    end,
+  })
   -- The chat's windows only ever show the chat. 'winfixbuf' stops `:edit`,
   -- `:buffer` and nvim_win_set_buf; this catches whatever gets past it (code that
   -- clears the option first): the chat goes back, the other buffer opens beside it.
