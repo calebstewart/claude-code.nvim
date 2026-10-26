@@ -1,6 +1,6 @@
 +++
 title = "Lua Agent SDK"
-weight = 9
+weight = 10
 description = "A standalone Lua port of the Claude Agent SDK: what it is, how to drive a conversation, and how it reads Claude Code's session store."
 +++
 
@@ -131,6 +131,40 @@ request.
 > [!NOTE]
 > Supplying `can_use_tool` implies `--permission-prompt-tool stdio`, so it is mutually exclusive with
 > `permission_prompt_tool_name`. Passing both is an error.
+
+## In-process MCP servers
+
+Tools whose handlers run in Neovim are served by an in-process MCP server, the equivalent of the TypeScript
+SDK's `createSdkMcpServer()` and `tool()`. Schemas are JSON Schema tables rather than zod shapes:
+
+```lua
+local server = sdk.create_sdk_mcp_server({
+  name = "nvim",
+  tools = {
+    sdk.tool("buffer_count", "How many buffers are loaded", nil, function(input, ctx, done)
+      return tostring(#vim.api.nvim_list_bufs())
+    end, { annotations = { readOnlyHint = true } }),
+  },
+})
+
+local query = sdk.query({
+  mcp_servers = { nvim = server },
+  -- ...
+})
+```
+
+Claude sees each tool as `mcp__<key>__<tool>`, where `<key>` is the server's key in `mcp_servers`. Calls go
+through `can_use_tool` like any other tool.
+
+The CLI never spawns the server. It is announced by name, in `--mcp-config` as `{ type = "sdk" }` and in the
+handshake's `sdkMcpServers`, and the CLI relays its JSON-RPC traffic back over the control channel as
+`mcp_message` requests. Only the tools part of MCP is implemented: `initialize`, `ping`, `tools/list`,
+`tools/call`, and `notifications/cancelled`.
+
+A handler returns its result, or returns nothing and calls `done(result)` later. A result is a string, an
+MCP `CallToolResult` (`{ content = {...}, is_error? }`), or any other value, which is sent as JSON.
+`done(nil, err)` or a raised error reports a failure. `ctx` carries `tool_use_id`, `cancelled()` and
+`on_cancel(fn)`, which fires when Claude withdraws the call, for example on an interrupt.
 
 ## Control methods
 

@@ -57,6 +57,7 @@ the defaults with `vim.tbl_deep_extend("force", …)`, so a partial table only o
   },
   env = nil,                 -- extra environment for each session's claude process: a table, or a
                              -- function(session) returning one, called whenever the process starts
+  tools = {},                -- custom tools Claude can call, run inside Neovim (transport = "direct" only)
 }
 ```
 
@@ -103,6 +104,13 @@ opts = {
 
 Values must be strings or numbers. Variables can be added or overridden, but not removed. They also override
 what the [worktree integration](#worktrees) sets, such as a tree's environment.
+
+### tools
+
+`claude_code.Tool[]`, default `{}`. [Custom tools](@/tools.md): Lua functions Claude can call, which run
+inside Neovim. Each is a table with `name`, `description`, `handler` and, optionally, `input_schema`, `title`
+and `annotations`. Claude sees a tool as `mcp__nvim__<name>`. Tools are read when a session's process starts.
+For now they need `transport = "direct"`.
 
 ## Conversation
 

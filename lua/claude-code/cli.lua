@@ -87,6 +87,8 @@ function Cli:start(init)
     include_partial_messages = true,
     -- Absent means on, as in the node sidecar.
     prompt_suggestions = init.prompt_suggestions ~= false,
+    -- Custom tools, served from Neovim. Read now, so a restart picks up changes.
+    mcp_servers = require("claude-code.mcp").servers({ session_id = session_id, cwd = init.cwd }),
     extra_args = {
       -- Echo user messages back: how a message from another session (which starts or
       -- joins a turn without a prompt from us) reaches the transcript.

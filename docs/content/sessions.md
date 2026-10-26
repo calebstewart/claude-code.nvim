@@ -1,6 +1,6 @@
 +++
 title = "Sessions"
-weight = 5
+weight = 6
 description = "The picker, the neo-tree sidebar, switching between conversations, idle suspension, resuming from disk, and messages between sessions."
 +++
 

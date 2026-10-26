@@ -6,6 +6,8 @@
 -- `--allowedTools` is camelCase while its neighbours are kebab-case; that
 -- inconsistency is the CLI's, and matching it matters.
 
+local mcp = require("claude-agent-sdk.mcp")
+
 local M = {}
 
 --- Fixed prefix. `--verbose` is required alongside stream-json output.
@@ -103,7 +105,13 @@ function M.build_argv(opts)
   end
 
   if opts.mcp_servers and not vim.tbl_isempty(opts.mcp_servers) then
-    flag("mcp-config", vim.json.encode({ mcpServers = opts.mcp_servers }))
+    -- In-process servers are announced by name only; the CLI relays their
+    -- traffic back to us over the control channel (see mcp.lua).
+    local servers = {}
+    for name, server in pairs(opts.mcp_servers) do
+      servers[name] = mcp.is_sdk_server(server) and { type = "sdk", name = name } or server
+    end
+    flag("mcp-config", vim.json.encode({ mcpServers = servers }))
   end
 
   equals("resume", opts.resume)

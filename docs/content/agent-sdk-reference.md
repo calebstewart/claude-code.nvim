@@ -1,6 +1,6 @@
 +++
 title = "SDK reference"
-weight = 10
+weight = 11
 description = "Every option, method and type in the Lua Agent SDK port."
 +++
 
@@ -17,6 +17,8 @@ local sdk = require("claude-agent-sdk")
 | `sdk.HARNESS_SCHEMA` | Protocol revision this port was written against |
 | `sdk.query(opts)` | Start a conversation. Returns a `Query` |
 | `sdk.build_argv(opts?)` | The argv `query` would spawn. Exposed for tests and inspection |
+| `sdk.create_sdk_mcp_server(opts)` | An [in-process MCP server](#mcptool) for `mcp_servers`. `opts`: `name`, `version?`, `tools?` |
+| `sdk.tool(name, description, input_schema?, handler, extras?)` | Define an `McpTool`. `extras`: `title`, `annotations`, `meta` |
 | `sdk.list_sessions(opts?)` | Sessions on disk |
 | `sdk.get_session_info(session_id, opts?)` | One session's metadata, or `nil` |
 | `sdk.get_session_messages(session_id, opts?)` | One session's messages |
@@ -102,7 +104,7 @@ These are sent in the `initialize` handshake rather than as CLI flags, so they c
 | `allowed_tools` | `string[]` | |
 | `disallowed_tools` | `string[]` | |
 | `add_dirs` | `string[]` | |
-| `mcp_servers` | `table<string, table>` | |
+| `mcp_servers` | `table<string, table>` | Server configs as in `.mcp.json`, or servers from `create_sdk_mcp_server` |
 | `strict_mcp_config` | `boolean` | |
 | `setting_sources` | `string[]` | |
 | `project_config_root` | `string` | |
@@ -274,6 +276,27 @@ What `can_use_tool` passes to `respond`.
 | `mcp_server` | |
 | `request_id` | |
 | `on_cancel` | `fun(fn)` — register a callback for when the CLI withdraws the request |
+
+### McpTool
+
+What `sdk.tool()` returns.
+
+| Field | |
+|---|---|
+| `name` | 1–64 letters, digits, `_` or `-` |
+| `description` | |
+| `input_schema` | JSON Schema for the arguments. `nil` takes none |
+| `handler` | `fun(input: table, ctx: McpToolContext, done: fun(result?, err?)): any`. Return the result, or return nothing and call `done` once. A result is a string, a `CallToolResult` (`{ content, is_error?, structured_content? }`) or any other value, sent as JSON. `done(nil, err)` or a raised error reports a failure |
+| `title`, `annotations`, `meta` | Passed through as the tool's `title`, `annotations` and `_meta` |
+
+### McpToolContext
+
+| Field | |
+|---|---|
+| `server` | The server's name |
+| `tool_use_id` | The tool call's id, when the CLI sends it |
+| `cancelled` | `fun(): boolean`. Whether Claude withdrew the call |
+| `on_cancel` | `fun(fn)`. Register a callback for when the call is withdrawn. `done` is then ignored |
 
 ## Argv construction
 

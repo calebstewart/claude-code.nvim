@@ -252,6 +252,20 @@ function M.worktree()
   return s and s.chat:worktree()
 end
 
+--- Add a tool Claude can call, run inside Neovim; Claude sees it as
+--- `mcp__nvim__<name>`. Replaces a registered tool of the same name. Sessions
+--- pick it up the next time their process starts. Direct transport only, for now.
+---@param tool claude_code.Tool
+function M.register_tool(tool)
+  require("claude-code.mcp").register(tool)
+end
+
+--- Remove a tool added with `register_tool()`.
+---@param name string
+function M.unregister_tool(name)
+  require("claude-code.mcp").unregister(name)
+end
+
 --- Switch to the next/previous session open in this Neovim.
 function M.next()
   sessions.cycle(1)
