@@ -1,6 +1,6 @@
 +++
 title = "Architecture"
-weight = 8
+weight = 9
 description = "The Node sidecar, the Lua core, and the experimental Node-free direct transport."
 +++
 
@@ -34,6 +34,7 @@ which is why installing the plugin needs no build step.
 | `history.lua` | The shared prompt history |
 | `images.lua` | Clipboard and file images, resizing and encoding |
 | `modes.lua` | Permission modes and reading `defaultMode` from settings |
+| `mcp.lua` | [Custom tools](@/tools.md): the registry, and the in-process `nvim` MCP server each direct-transport session gets |
 | `health.lua` | `:checkhealth claude-code` |
 
 **UI** (`lua/claude-code/ui/`) — `chat.lua` (layout, keymaps, status), `transcript.lua` (the append-only

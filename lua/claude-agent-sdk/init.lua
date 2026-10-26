@@ -26,6 +26,7 @@
 --   options.lua    options    -> argv + env      (ProcessTransport's arg builder)
 --   transport.lua  process    -> framed JSON     (ProcessTransport)
 --   control.lua    control_request/response      (Query's control plumbing)
+--   mcp.lua        in-process MCP servers         (createSdkMcpServer, tool)
 --   query.lua      demux + the imperative API    (Query)
 
 ---@alias claude_agent_sdk.PermissionMode "default"|"acceptEdits"|"plan"|"dontAsk"|"auto"|"bypassPermissions"
@@ -102,7 +103,7 @@
 ---@field allowed_tools? string[]
 ---@field disallowed_tools? string[]
 ---@field add_dirs? string[]
----@field mcp_servers? table<string, table>
+---@field mcp_servers? table<string, table> MCP server configs, as in `.mcp.json`, or in-process servers from `create_sdk_mcp_server`.
 ---@field strict_mcp_config? boolean
 ---@field setting_sources? string[]
 ---@field project_config_root? string
@@ -129,6 +130,28 @@ M.HARNESS_SCHEMA = 1
 ---@return claude_agent_sdk.Query
 function M.query(opts)
   return require("claude-agent-sdk.query").new(opts or {})
+end
+
+--- Define a tool for an in-process MCP server. Mirrors the TypeScript SDK's
+--- `tool()`, taking a JSON Schema where that takes a zod shape. See mcp.lua for
+--- the handler's contract.
+---@param name string
+---@param description string
+---@param input_schema? table
+---@param handler claude_agent_sdk.McpToolHandler
+---@param extras? { title?: string, annotations?: table, meta?: table }
+---@return claude_agent_sdk.McpTool
+function M.tool(name, description, input_schema, handler, extras)
+  return require("claude-agent-sdk.mcp").tool(name, description, input_schema, handler, extras)
+end
+
+--- An MCP server whose tools run inside Neovim; put it in `mcp_servers`.
+--- Claude sees its tools as `mcp__<key>__<tool>`, where `<key>` is its key in
+--- `mcp_servers`. Mirrors the TypeScript SDK's `createSdkMcpServer()`.
+---@param opts { name: string, version?: string, tools?: claude_agent_sdk.McpTool[] }
+---@return claude_agent_sdk.McpSdkServerConfig
+function M.create_sdk_mcp_server(opts)
+  return require("claude-agent-sdk.mcp").create_server(opts)
 end
 
 --- Exposed for tests and for callers that want to inspect the spawn.

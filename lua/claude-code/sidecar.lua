@@ -64,6 +64,9 @@ end
 
 ---@param init? claude_code.InitRequest Sent first; session mode needs it, control mode doesn't.
 function Sidecar:start(init)
+  if init then
+    require("claude-code.mcp").warn_unsupported()
+  end
   local stderr = {}
   local cmd = { config.options.node, Sidecar.script_path() }
   vim.list_extend(cmd, self.args)

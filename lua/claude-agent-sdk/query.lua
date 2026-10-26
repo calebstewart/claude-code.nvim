@@ -8,6 +8,7 @@
 
 local Control = require("claude-agent-sdk.control")
 local Transport = require("claude-agent-sdk.transport")
+local mcp = require("claude-agent-sdk.mcp")
 local options = require("claude-agent-sdk.options")
 
 ---@class claude_agent_sdk.Query
@@ -16,6 +17,7 @@ local options = require("claude-agent-sdk.options")
 ---@field private opts claude_agent_sdk.Options
 ---@field private info? table Payload of the initialize response.
 ---@field private commands table[] Kept current from `system/commands_changed`.
+---@field private sdk_servers table<string, claude_agent_sdk.McpServer> In-process MCP servers, by the name the CLI knows them by.
 ---@field private closed boolean
 local Query = {}
 Query.__index = Query
@@ -34,6 +36,15 @@ local IGNORED = {
 ---@param opts claude_agent_sdk.Options
 ---@return table
 local function initialize_payload(opts)
+  -- In-process MCP servers: the CLI waits for these to be named here before it
+  -- relays their traffic to us.
+  local sdk_servers = {}
+  for name, server in pairs(opts.mcp_servers or {}) do
+    if mcp.is_sdk_server(server) then
+      table.insert(sdk_servers, name)
+    end
+  end
+  table.sort(sdk_servers)
   local system_prompt = opts.system_prompt
   if type(system_prompt) == "string" then
     -- The wire format is a list of segments; a bare string is one segment.
@@ -41,6 +52,7 @@ local function initialize_payload(opts)
   end
   return vim.tbl_extend("force", {
     subtype = "initialize",
+    sdkMcpServers = #sdk_servers > 0 and sdk_servers or nil,
     systemPrompt = system_prompt,
     appendSystemPrompt = opts.append_system_prompt,
     appendSubagentSystemPrompt = opts.append_subagent_system_prompt,
@@ -86,7 +98,12 @@ end
 ---@param opts claude_agent_sdk.Options
 ---@return claude_agent_sdk.Query
 function Query.new(opts)
-  local self = setmetatable({ opts = opts, commands = {}, closed = false }, Query)
+  local self = setmetatable({ opts = opts, commands = {}, closed = false, sdk_servers = {} }, Query)
+  for name, server in pairs(opts.mcp_servers or {}) do
+    if mcp.is_sdk_server(server) then
+      self.sdk_servers[name] = server.instance
+    end
+  end
 
   self.transport = Transport.new({
     argv = vim.list_extend({ opts.executable or "claude" }, options.build_argv(opts)),
@@ -98,6 +115,9 @@ function Query.new(opts)
     on_exit = function(code, stderr)
       self.closed = true
       self.control:fail_all("claude process exited")
+      for _, server in pairs(self.sdk_servers) do
+        server:cancel_all()
+      end
       if opts.on_exit then
         opts.on_exit(code, stderr)
       end
@@ -188,6 +208,24 @@ function Query:control_handlers()
       }, function(result)
         respond(permission_result(result, request.tool_use_id))
       end)
+    end,
+    -- JSON-RPC for an in-process MCP server. Requests are answered with the
+    -- server's reply; notifications get a placeholder, as the TypeScript SDK
+    -- sends, since every control request needs a response.
+    mcp_message = function(request, respond, ctx)
+      local server = self.sdk_servers[request.server_name]
+      if not server then
+        error(("SDK MCP server not found: %s"):format(tostring(request.server_name)), 0)
+      end
+      local message = type(request.message) == "table" and request.message or {}
+      if message.method ~= nil and message.id ~= nil and message.id ~= vim.NIL then
+        server:handle(message, function(reply)
+          respond({ mcp_response = reply })
+        end, ctx.on_cancel)
+      else
+        server:notify(message)
+        respond({ mcp_response = { jsonrpc = "2.0", result = vim.empty_dict(), id = 0 } })
+      end
     end,
   }
 end

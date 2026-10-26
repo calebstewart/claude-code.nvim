@@ -1,6 +1,6 @@
 +++
 title = "Appearance"
-weight = 7
+weight = 8
 description = "How colors are derived from your colorscheme, every highlight group, and the chat's filetypes."
 +++
 

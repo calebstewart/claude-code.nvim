@@ -127,6 +127,7 @@ Defaults:
   },
   env = nil,                 -- extra environment for each session's claude process: a table, or a
                              -- function(session) returning one, called whenever the process starts
+  tools = {},                -- custom tools Claude can call, run inside Neovim (transport = "direct" only)
 }
 ```
 

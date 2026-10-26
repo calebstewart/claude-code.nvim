@@ -1,6 +1,6 @@
 +++
 title = "Commands"
-weight = 6
+weight = 7
 description = "The :Claude subcommands and the matching Lua API."
 +++
 
@@ -57,6 +57,8 @@ need arguments or conditions.
 | `image(path)` | Attach an image file to the prompt, opening the chat if needed |
 | `deliver()` | Deliver the current session's held messages from other sessions |
 | `next()` / `prev()` | Switch to the next or previous session open in this Neovim |
+| `register_tool(tool)` | Add a [custom tool](@/tools.md). It replaces a registered tool of the same name |
+| `unregister_tool(name)` | Remove a tool added with `register_tool()` |
 | `worktree()` | The current session's [`wt` tree](@/configuration.md#worktrees) (`{ name, slot, branch, path }`) or `nil`, for statuslines. Never runs `wt` |
 
 ```lua

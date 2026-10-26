@@ -1,6 +1,6 @@
 +++
 title = "Development"
-weight = 11
+weight = 12
 description = "Building the sidecar, formatting, and previewing this site."
 +++
 

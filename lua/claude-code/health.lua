@@ -66,7 +66,30 @@ function M.check()
     vim.health.warn("Session store not found: " .. store, "It appears once Claude Code has run here")
   end
 
+  M.check_tools()
   M.check_worktree()
+end
+
+--- Custom tools: which there are, and whether the transport serves them.
+function M.check_tools()
+  vim.health.start("claude-code.nvim: custom tools")
+  local mcp = require("claude-code.mcp")
+  local tools = mcp.list()
+  if #tools == 0 then
+    vim.health.info("None (add them with the `tools` option or `register_tool()`)")
+    return
+  end
+  local names = vim.tbl_map(function(tool)
+    return ("mcp__%s__%s"):format(mcp.SERVER, tool.name)
+  end, tools)
+  if transport.uses_node() then
+    vim.health.warn(
+      ("%d tool(s) defined, but the sidecar transport doesn't serve them: %s"):format(#tools, table.concat(names, ", ")),
+      'Set `transport = "direct"` in setup()'
+    )
+  else
+    vim.health.ok(("%d tool(s): %s"):format(#tools, table.concat(names, ", ")))
+  end
 end
 
 --- The optional `wt` integration: off, missing, or working.
